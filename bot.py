@@ -78,9 +78,16 @@ class botman(discord.Client):
 
     async def on_member_update(self, before:discord.Member, after:discord.Member):
         #incredibly convenient function that is literally exactly what I need
-        if after.nick != before.nick:
+        if after.nick != before.nick and after.nick is not None:
+            #nick removal isn't a *new* nickname so there's nothing to log (before.nick already had it)
             self.daba.addRecord("Nicknames",db.easy_nickn_str(after.id,after.nick))
-            print("nickname change detected, added to db")  
+            print("nickname change detected, added to db")
+        if after.name != before.name or after.global_name != before.global_name:
+            #username/display name changes: Users is current-state, so just overwrite
+            self.daba.updRecord("Users",
+                "username=" + db.sqlstr(after.name) + ", display_name=" + db.sqlstr(after.global_name),
+                "user_id = " + db.sqlstr(str(after.id)))
+            print("username/display name change detected, updated db")
         #we don't care if someone changed their profile pic or whatever  
 
     #}

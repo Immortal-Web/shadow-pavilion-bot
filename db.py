@@ -40,6 +40,14 @@ class dbthingy:
         for tables in TABLE_GEN:
             self.crsr.execute(tables[TSQL_INDEX]) 
 
+        #migration for dbs older than timestamp tracking: sqlite refuses ALTER ... ADD COLUMN
+        #with a non-constant default, so add it plain. old rows stay NULL (we genuinely don't
+        #know when they were set) and every new insert supplies datetime('now') itself
+        cols = [row[1] for row in self.crsr.execute("PRAGMA table_info(Nicknames)").fetchall()]
+        if "changed_at" not in cols:
+            self.crsr.execute("ALTER TABLE Nicknames ADD COLUMN changed_at TEXT")
+
+        self.crsr.execute(NICKN_INDEX_SQLCOM)
         self.cnctn.commit()
 
     #man honestly I miss the {} they actually make things easier to read
@@ -121,7 +129,9 @@ def sqlstr(value)->str:
 def easy_user_str(userid:str, user_name:str, user_dispname:str)->str:
     return f"({sqlstr(userid)},{sqlstr(user_name)},{sqlstr(user_dispname)})"
 def easy_nickn_str(userid:str, nickname:str)->str:
-    return f"(NULL,{sqlstr(userid)},{sqlstr(nickname)})"
+    #datetime('now') stays unquoted so sqlite evaluates it itself at insert time (utc).
+    #don't quote it or you'll just store the words "datetime('now')" like a goober
+    return f"(NULL,{sqlstr(userid)},{sqlstr(nickname)},datetime('now'))"
 def easy_expln_str(nicknid:str,explanation:str)->str:
     return f"(NULL,{nicknid},{sqlstr(explanation)})"
 

@@ -23,16 +23,17 @@ DB_FILENAM: str = 'nicknames.db'
 #ok so I think I read that __x makes it semi-invisible outside this file? (though i'm still unsure if __ or _ is more proper...)
 __USERS_SQLCOM:str = '''
                     CREATE TABLE IF NOT EXISTS Users(
-                        user_id varchar[35] PRIMARY KEY,
-                        username varchar[35],
-                        display_name varchar[35]
+                        user_id varchar(35) PRIMARY KEY,
+                        username varchar(35),
+                        display_name varchar(35)
                     );
                 '''
 __NICKN_SQLCOM:str ='''
                     CREATE TABLE IF NOT EXISTS Nicknames(
                         nickn_id INTEGER PRIMARY KEY,
-                        user_id varchar[35],
-                        nickname varchar[35],
+                        user_id varchar(35),
+                        nickname varchar(35),
+                        changed_at TEXT,
                         FOREIGN KEY (user_id) REFERENCES Users(user_id)
                     );
                 '''
@@ -40,13 +41,16 @@ __EXPLN_SQLCOM:str = '''
                     CREATE TABLE IF NOT EXISTS Explanations(
                         expln_id INTEGER PRIMARY KEY,
                         nickn_id int,
-                        explanation varchar[80],
+                        explanation varchar(80),
                         FOREIGN KEY (nickn_id) REFERENCES Nicknames(nickn_id)
                     );
                 '''
 
+#one index so print_nicknames doesn't full-scan the table every time
+NICKN_INDEX_SQLCOM:str = "CREATE INDEX IF NOT EXISTS idx_nicknames_user_id ON Nicknames(user_id);"
+
 __USERS_TABLE_REGEX:str = r"^\(([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"    #beautiful isn't it?
-__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"            #lmao
+__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL),datetime\('now'\)\)$"            #lmao
 __EXPLN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),[0-9]+,([\"\'].+[\"\']|NULL)\)$"  #regexes are actually op
 
 #anyway this all isn't strictly necessary its just my way of ensuring that if you add more tables

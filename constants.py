@@ -45,9 +45,9 @@ __EXPLN_SQLCOM:str = '''
                     );
                 '''
 
-__USERS_TABLE_REGEX:str = r"^\([\"\'].+[\"\'],[\"\'].+[\"\'],[\"\'].+[\"\']\)$"    #beautiful isn't it?
-__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),[\"\'].+[\"\'],[\"\'].+[\"\']\)$"            #lmao
-__EXPLN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),[0-9]+,[\"\'].+[\"\']\)$"  #regexes are actually op
+__USERS_TABLE_REGEX:str = r"^\(([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"    #beautiful isn't it?
+__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"            #lmao
+__EXPLN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),[0-9]+,([\"\'].+[\"\']|NULL)\)$"  #regexes are actually op
 
 #anyway this all isn't strictly necessary its just my way of ensuring that if you add more tables
 #you add all these other things too

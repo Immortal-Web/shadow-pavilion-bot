@@ -46,7 +46,7 @@ class dbthingy:
     
     #adds a record to the database. format: name, '(<csv>)' <--as you would if you were typing the sql yourself
     #one at a time i'm not processing multiple lmao
-    def addRecord(self,tableName:str, addingvalues:str):
+    def addRecord(self,tableName:str, addingvalues:str)->bool:
         succed:bool =False
 
         for table in TABLE_GEN: 
@@ -59,6 +59,7 @@ class dbthingy:
 
         if succed == False:
             print("failed to add")
+        return succed
 
     
     #updates a record in the database. figure out the sql yourself
@@ -108,13 +109,21 @@ class dbthingy:
         self.cnctn.commit()
 
 
+#turns a python value into a quoted sql value, or NULL if there's nothing there.
+#doubles any embedded quotes because that's how sql escapes them ('it's' -> 'it''s')
+#(without this, any nickname with an apostrophe silently fails the regex and gets dropped. rip)
+def sqlstr(value)->str:
+    if value is None:
+        return "NULL"
+    return "'" + str(value).replace("'", "''") + "'"
+
 #you know, I probably could have designed this better so I didn't need all this, but whatever
 def easy_user_str(userid:str, user_name:str, user_dispname:str)->str:
-    return f"('{userid}','{user_name}','{user_dispname}')"
+    return f"({sqlstr(userid)},{sqlstr(user_name)},{sqlstr(user_dispname)})"
 def easy_nickn_str(userid:str, nickname:str)->str:
-    return f"(NULL,'{userid}','{nickname}')"
+    return f"(NULL,{sqlstr(userid)},{sqlstr(nickname)})"
 def easy_expln_str(nicknid:str,explanation:str)->str:
-    return f"(NULL,{nicknid},'{explanation}')"
+    return f"(NULL,{nicknid},{sqlstr(explanation)})"
 
 
 #TESTING: (it works)

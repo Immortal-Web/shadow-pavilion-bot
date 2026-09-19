@@ -27,17 +27,26 @@ class botman(discord.Client):
 
     def firstRun_setup(self):
         #sets up database
+        #if we're re-running this, close the old connection instead of leaking it
+        #(an abandoned sqlite handle also locks the db file on windows, which is rude)
+        if hasattr(self, "daba"):
+            self.daba.finish()
         self.daba = db.dbthingy(db.DB_FILENAM)
         self.daba.SetupDB()
         #also the db thing is like not done properly at all
         #I don't care sqlalchemy is awful I had to use if for work its really really annoying
 
-        #adds all server members to database
-        #might? take a while?
+        #adds all server members to database. might? take a while?
+        #ignoredupes so running this twice doesn't die on the primary key,
+        #commit=False because one commit at the end beats ten thousand of them
         for member in self.get_guild(constants.GUILD_TOKEN).members:
-            self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name)) 
-            self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick))
+            self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True,commit=False)
+            #also grab everyone's current nickname while we're at it
+            #(skip the nickless — easy_nickn_str would happily store the word 'None')
+            if member.nick is not None:
+                self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
         #}
+        self.daba.save()
     #}
 
     #don't even get me started on async but this is basically when the bot actually loads ready
@@ -140,7 +149,9 @@ async def slashemergsql(interac:discord.Interaction,query:str):
 
 
 
-client.run(constants.BOT_TOKEN)
+if __name__ == '__main__':
+    #so tests can import this file without trying to log into discord with a fake token
+    client.run(constants.BOT_TOKEN)
 
 #current issues I can't be bothered to address:
 '''

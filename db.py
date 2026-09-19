@@ -7,6 +7,7 @@ from constants import * #I think this is how its done??
 
 # my "#define"s
 gener_INSERT:str = "INSERT INTO {table} VALUES {values};"
+gener_INSERT_IGNORE:str = "INSERT OR IGNORE INTO {table} VALUES {values};"
 gener_UPDATE:str = "UPDATE {table} SET {changed} WHERE {conditions};"
 gener_DELETE:str = "DELETE FROM {table} WHERE {conditions};"
 gener_SELECT:str = "SELECT {csvalues} FROM {table} {conditions};"
@@ -33,6 +34,10 @@ class dbthingy:
         self.cnctn.close()
         #this should be good enough I think?
 
+    def save(self):
+        #like finish() but doesn't close the connection (for batched inserts)
+        self.cnctn.commit()
+
     #sets up the username database. intended to only be run once on initial setup,
     #but its not like running it again causes any problems
     def SetupDB(self):
@@ -54,14 +59,18 @@ class dbthingy:
     
     #adds a record to the database. format: name, '(<csv>)' <--as you would if you were typing the sql yourself
     #one at a time i'm not processing multiple lmao
-    def addRecord(self,tableName:str, addingvalues:str)->bool:
+    def addRecord(self,tableName:str, addingvalues:str, ignoredupes:bool=False, commit:bool=True)->bool:
+        #ignoredupes: swap INSERT for INSERT OR IGNORE (firstrun re-scans would otherwise
+        #explode on the Users primary key). commit=False: caller batches and calls save() themselves
         succed:bool =False
 
-        for table in TABLE_GEN: 
+        for table in TABLE_GEN:
             #checks for valid table name and values that match the table
-            if tableName == table[TNAME_INDEX] and (re.search(table[TREGEX_INDEX],addingvalues))!= None:  
-                self.crsr.execute(gener_INSERT.format(table=tableName,values=addingvalues))
-                self.cnctn.commit()
+            if tableName == table[TNAME_INDEX] and (re.search(table[TREGEX_INDEX],addingvalues))!= None:
+                gener = gener_INSERT_IGNORE if ignoredupes else gener_INSERT
+                self.crsr.execute(gener.format(table=tableName,values=addingvalues))
+                if commit:
+                    self.cnctn.commit()
 
                 succed=True
 

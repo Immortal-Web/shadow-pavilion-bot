@@ -73,7 +73,8 @@ class botman(discord.Client):
 
     async def on_member_join(self,member):
         #we are, in fact, going to scan every person that joins this server
-        self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name)) 
+        #ignoredupes: if they left and came back the row's already there, nothing new to learn
+        self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True)
     #}
 
     #async def on_message(self, message:discord.Message):
@@ -147,7 +148,13 @@ async def slashexplnnick(interac:discord.Interaction, nicknid:int, private:bool)
 @tree.command(name="add_explanation",description="add an explanation for a nickname",guild=discord.Object(id=constants.GUILD_TOKEN))
 @app_commands.checks.has_role(constants.ROLE)
 async def slashaddexpl(interac:discord.Interaction, nicknid:int, explanation:str):
-    if tree.client.daba.addRecord("Explanations",db.easy_expln_str(nicknid,explanation)):
+    try:
+        succed = tree.client.daba.addRecord("Explanations",db.easy_expln_str(nicknid,explanation))
+    except sqlite3.Error as e:
+        #typo'd nickn_id trips the foreign key. used to escape and discord would show "did not respond"
+        await interac.response.send_message("failed to add (bad characters? blank?)",ephemeral=True)
+        return
+    if succed:
         await interac.response.send_message(f"explanation '{explanation}' added",ephemeral=True)
     else:
         #basically only fails on weird characters now (apostrophes work), but don't lie about it

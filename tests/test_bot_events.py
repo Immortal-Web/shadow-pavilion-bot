@@ -59,5 +59,26 @@ class MemberUpdateTests(unittest.TestCase):
         self.assertEqual(self.daba.rdRecords("Nicknames", "nickn_id", ""), [])
 
 
+class MemberJoinTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.daba = db.dbthingy(os.path.join(self._tmp.name, "t.db"))
+        self.daba.SetupDB()
+        self.client = bot.botman(intents=bot.intents)
+        self.client.daba = self.daba
+
+    def tearDown(self):
+        self.daba.finish()
+        self._tmp.cleanup()
+
+    def test_rejoining_member_does_not_crash_or_duplicate(self):
+        #leave and rejoin: the second insert would explode on the Users primary key
+        member = SimpleNamespace(id=1, name="a", global_name="A")
+        run(self.client.on_member_join(member))
+        run(self.client.on_member_join(member))  #rejoin must not raise
+        rows = self.daba.rdRecords("Users", "user_id", "WHERE user_id = '1'")
+        self.assertEqual(rows, [("1",)])  #still exactly one row
+
+
 if __name__ == "__main__":
     unittest.main()

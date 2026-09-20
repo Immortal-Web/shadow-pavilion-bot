@@ -94,6 +94,13 @@ class CommandTests(unittest.TestCase):
         rows = self.daba.rdRecords("Explanations", "explanation", f"WHERE nickn_id = {nickn_id}")
         self.assertEqual(rows, [("he's the man",)])
 
+    def test_add_explanation_sql_error_gets_an_answer_not_silence(self):
+        #a nickn_id with no Nicknames row trips the foreign key; must not escape the callback
+        interac = FakeInterac()
+        run(command("add_explanation")(interac, 999999, "explanation"))
+        self.assertEqual(len(interac.response.sent), 1)
+        self.assertIn("failed to add", interac.response.sent[0])
+
     def test_every_sensitive_command_has_the_role_check(self):
         #has_role only gates at runtime; this catches a decorator going missing again
         src = open("bot.py", encoding="utf-8").read()

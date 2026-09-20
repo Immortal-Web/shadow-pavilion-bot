@@ -5,6 +5,8 @@
 
 #okay imma be real I just followed along a tutorial for half of this crap
 #don't get me started on APIs
+import sqlite3
+
 import discord
 from discord import app_commands
 import constants
@@ -119,8 +121,9 @@ async def slashgetall(interac:discord.Interaction):
 
 #dump entire table
 @tree.command(name="dump_table", description="spits out raw sql file",guild=discord.Object(id=constants.GUILD_TOKEN))
+@app_commands.checks.has_role(constants.ROLE)
 async def slashdumptable(interac:discord.Interaction):
-    table = discord.File("nicknames.db",filename="nicknames.db")
+    table = discord.File(constants.DB_FILENAM,filename="nicknames.db")
     await interac.response.send_message("file",file=table,ephemeral=True)
 #}
 
@@ -144,8 +147,11 @@ async def slashexplnnick(interac:discord.Interaction, nicknid:int, private:bool)
 @tree.command(name="add_explanation",description="add an explanation for a nickname",guild=discord.Object(id=constants.GUILD_TOKEN))
 @app_commands.checks.has_role(constants.ROLE)
 async def slashaddexpl(interac:discord.Interaction, nicknid:int, explanation:str):
-    tree.client.daba.addRecord("Explanations",db.easy_expln_str(nicknid,explanation))
-    await interac.response.send_message(f"explanation '{explanation}' added",ephemeral=True)
+    if tree.client.daba.addRecord("Explanations",db.easy_expln_str(nicknid,explanation)):
+        await interac.response.send_message(f"explanation '{explanation}' added",ephemeral=True)
+    else:
+        #basically only fails on weird characters now (apostrophes work), but don't lie about it
+        await interac.response.send_message("failed to add (bad characters? blank?)",ephemeral=True)
 #}
 
 #update explanation using id
@@ -155,10 +161,21 @@ async def slashaddexpl(interac:discord.Interaction, nicknid:int, explanation:str
 @tree.command(name="direct_sql",description="directly performs sql",guild=discord.Object(id=constants.GUILD_TOKEN))
 @app_commands.checks.has_role(constants.ROLE)
 async def slashemergsql(interac:discord.Interaction,query:str):
-    tree.client.daba.raw(query)
+    try:
+        result = tree.client.daba.raw(query)
+    except sqlite3.Error as e:
+        #used to just die here and the discord client would show "did not respond". not anymore
+        await interac.response.send_message(f"sql error: {e}",ephemeral=True)
+        return
 
     role = discord.utils.get(interac.guild.roles, name=constants.ROLE)
-    await interac.response.send_message(f"{role.mention} raw executed. query: {query}")
+    mention = role.mention if role else "@" + constants.ROLE
+
+    if result is None:
+        result = "done. no rows."
+    #discord caps messages at 2000 chars so butcher anything enormous before it bites us
+    msg = f"{mention} raw executed. query: {query}\n{str(result)}"
+    await interac.response.send_message(msg[:1900])
 #}
 
 

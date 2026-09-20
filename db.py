@@ -123,7 +123,10 @@ class dbthingy:
     
     def raw(self, query:str):
         self.crsr.execute(query)
+        #selects describe their columns, writes don't. so: hand back rows if there are any
+        retval = self.crsr.fetchall() if self.crsr.description else None
         self.cnctn.commit()
+        return retval
 
 
 #turns a python value into a quoted sql value, or NULL if there's nothing there.

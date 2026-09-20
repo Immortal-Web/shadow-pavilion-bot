@@ -49,17 +49,23 @@ class botman(discord.Client):
         self.daba.save()
     #}
 
+    #runs exactly once per process, before on_ready (which fires on every reconnect —
+    #old code opened a fresh sqlite connection and re-synced commands each time. oops)
+    async def setup_hook(self):
+        self.daba = db.dbthingy(db.DB_FILENAM)
+        self.daba.SetupDB() #if-not-exists + migration, safe every boot
+
+        #you have to like sync it otherwise testing gets annoying cus it takes too long
+        #but this limits it to 1 server? ah well whatever
+        await tree.sync(guild=discord.Object(id=constants.GUILD_TOKEN))
+            #what is tree? good question I dunno.
+
     #don't even get me started on async but this is basically when the bot actually loads ready
     async def on_ready(self):
        # self.autoparsing= constants.AUTOPARSE_DEFAULT
         #self.titleshouting=constants.TITLESHOUT_DEFAULT
 
-        self.daba = db.dbthingy(db.DB_FILENAM)
-
-        #you have to like sync it otherwise teting gets annoying cus it takes too long
-        #but this limits it to 1 server? ah well whatever
-        await tree.sync(guild=discord.Object(id=constants.GUILD_TOKEN))
-            #what is tree? good question I dunno.
+        #everything real moved to setup_hook, this is just a heartbeat now
         print("longged on")
     #}
 
@@ -95,7 +101,8 @@ class botman(discord.Client):
 
 #still not sure what this all is
 intents = discord.Intents.default()
-intents.message_content = True
+#message_content removed: nothing reads messages (on_message is commented out) and it's
+#a privileged intent you'd have to beg the dev portal for. members intent stays, we need it
 intents.members=True
 
 client = botman(intents=intents)

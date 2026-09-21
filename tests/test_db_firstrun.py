@@ -12,8 +12,8 @@ class FirstRunTests(unittest.TestCase):
     def test_firstrun_twice_is_safe_and_dedupes(self):
         with tempfile.TemporaryDirectory() as tmp:
             members = [
-                SimpleNamespace(id=1, name="a", global_name="A"),
-                SimpleNamespace(id=2, name="it's b", global_name=None),
+                SimpleNamespace(id=1, name="a", global_name="A", nick="ace"),
+                SimpleNamespace(id=2, name="it's b", global_name=None, nick=None),
             ]
             fake_guild = SimpleNamespace(members=members)
             original = db.DB_FILENAM
@@ -27,6 +27,9 @@ class FirstRunTests(unittest.TestCase):
 
                 rows = client.daba.rdRecords("Users", "user_id, username", "ORDER BY user_id")
                 self.assertEqual(rows, [("1", "a"), ("2", "it's b")])  #deduped, not duplicated
+                #firstrun also grabs current nicks; nickless members are skipped (no 'None' rows)
+                nicks = client.daba.rdRecords("Nicknames", "user_id, nickname", "ORDER BY nickn_id")
+                self.assertEqual(nicks, [("1", "ace"), ("1", "ace")])  #one per run — Nicknames is append-only
                 client.daba.finish()
             finally:
                 db.DB_FILENAM = original  #CRITICAL: never leave this pointing into tmp-less reality

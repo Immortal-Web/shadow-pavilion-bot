@@ -80,31 +80,40 @@ class CommandTests(unittest.TestCase):
 
     def test_add_explanation_failure_is_reported(self):
         #values that fail the validation regex (newline) must not claim success
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
+        user = SimpleNamespace(id=1, display_name="A")
         interac = FakeInterac()
-        run(command("add_explanation")(interac, 1, "line one\nline two"))
+        run(command("add_explanation")(interac, user, 1, "line one\nline two"))
         self.assertEqual(interac.response.sent, ["failed to add (bad characters? blank?)"])
 
     def test_add_explanation_success_round_trips(self):
         self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
         self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
         nickn_id = self.daba.rdRecords("Nicknames", "nickn_id", "WHERE nickname = 'bob'")[0][0]
+        user = SimpleNamespace(id=1, display_name="A")
         interac = FakeInterac()
-        run(command("add_explanation")(interac, nickn_id, "he's the man"))
+        run(command("add_explanation")(interac, user, 1, "he's the man"))
         self.assertIn("added", interac.response.sent[0])
+        self.assertIn("#1", interac.response.sent[0])  #points at the per-user number, not the db id
         rows = self.daba.rdRecords("Explanations", "explanation", f"WHERE nickn_id = {nickn_id}")
         self.assertEqual(rows, [("he's the man",)])
 
-    def test_add_explanation_sql_error_gets_an_answer_not_silence(self):
-        #a nickn_id with no Nicknames row trips the foreign key; must not escape the callback
+    def test_add_explanation_bad_index_gets_an_answer_not_silence(self):
+        #an index past the user's list must be answered, not silently ignored
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
+        user = SimpleNamespace(id=1, display_name="A")
         interac = FakeInterac()
-        run(command("add_explanation")(interac, 999999, "explanation"))
+        run(command("add_explanation")(interac, user, 999, "explanation"))
         self.assertEqual(len(interac.response.sent), 1)
-        self.assertIn("failed to add", interac.response.sent[0])
+        self.assertIn("doesn't have that many", interac.response.sent[0])
 
     def test_every_sensitive_command_has_the_role_check(self):
         #has_role only gates at runtime; this catches a decorator going missing again
         src = open("bot.py", encoding="utf-8").read()
-        for name in ("slashgetall", "slashdumptable", "slashaddexpl", "slashemergsql"):
+        for name in ("slashgetall", "slashdumptable", "slashaddexpl", "slashemergsql",
+                     "slashdownloadlogs", "slashbackfill"):
             up_to_def = src[:src.index(f"async def {name}")]
             decorators = up_to_def.split("@tree.command")[-1]
             self.assertIn("has_role", decorators, f"{name} lost its role check")

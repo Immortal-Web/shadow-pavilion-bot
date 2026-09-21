@@ -25,6 +25,11 @@ GUILD_TOKEN  = int(os.environ.get("GUILD_TOKEN", "2")) #i forget where you find 
 
 ROLE = "Shadow pavilion"
 
+#the dyno/carl-bot logging channel we mine for past nicknames (the bot only ever sees
+#changes from its own start date, but those two have been logging everything forever).
+#not a secret — it's an id, worst case someone points their own bot at a channel they can't read
+LOG_CHANNEL:int = int(os.environ.get("LOG_CHANNEL", "1404266860937216082"))
+
 #change these if you want since otherwise you'll have to everytime you restart it
 AUTOPARSE_DEFAULT = True 
 TITLESHOUT_DEFAULT = True

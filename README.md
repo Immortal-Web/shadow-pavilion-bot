@@ -22,11 +22,18 @@ All commands only exist in the configured guild. "Role-gated" = requires the rol
 | Command | What it does | Role-gated |
 |---|---|---|
 | `/firstrun_init` | Create tables, backfill all current members | yes |
-| `/print_nicknames user private` | List a user's nicknames with their IDs | no |
-| `/explain_nickname nickn_id private` | Show a nickname and its explanation(s) | no |
-| `/add_explanation nickn_id explanation` | Attach an explanation to a nickname | yes |
+| `/print_nicknames user private` | List a user's nicknames as `#1..#N` oldest-first with first-seen dates | no |
+| `/explain_nickname user index private` | Show one of a user's nicknames (by its `#`number) and its explanation(s) | no |
+| `/add_explanation user index explanation` | Attach an explanation to one of a user's nicknames (by its `#`number) | yes |
 | `/dump_table` | Send the raw `nicknames.db` file | no |
 | `/direct_sql query` | Run arbitrary SQL against the database | yes |
+| `/download_logs [channel]` | Dump a channel's entire history to `logdump_<id>.jsonl` (defaults to the configured logging channel) | yes |
+| `/backfill_nicknames [channel]` | Parse the dump's Dyno/Carl-bot nickname logs into the database as past nicknames | yes |
+| `/nickname_history user private` | Print a user's nickname changes in chronological order from the dump | no |
+
+The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. `/download_logs` archives that channel (the Message Content intent is required for this), `/backfill_nicknames` recovers every old nickname out of it into the database, and `/nickname_history` shows the timeline (the database has no timestamps by design, so order comes from the dump).
+
+The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames the log dump never saw a change for sort first with an `(undated)` marker.
 
 ## Files
 

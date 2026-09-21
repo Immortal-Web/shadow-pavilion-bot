@@ -5,7 +5,11 @@
 
 #okay imma be real I just followed along a tutorial for half of this crap
 #don't get me started on APIs
+import json
+import os
+import re
 import sqlite3
+from datetime import datetime
 
 import discord
 from discord import app_commands
@@ -104,12 +108,204 @@ class botman(discord.Client):
 
 #still not sure what this all is
 intents = discord.Intents.default()
-#message_content removed: nothing reads messages (on_message is commented out) and it's
-#a privileged intent you'd have to beg the dev portal for. members intent stays, we need it
+#members: needed for join/nick-change events. message_content: it's back — reading the
+#logging bots' embeds (the whole backfill thing below) is gated behind it, so the
+#dev portal toggle has to be on too or the bot won't even start
 intents.members=True
+intents.message_content=True
 
 client = botman(intents=intents)
 tree = app_commands.CommandTree(client)
+
+
+#--- digging old nicknames out of the logging channel ---
+#dyno and carl-bot both log every nick change to one channel. this bot only ever sees
+#changes since it started running, but those two have been logging forever — so:
+#download the channel, parse the embeds, and every old nickname goes into the db
+#as if we'd been watching the whole time
+
+#dump file for a downloaded channel, kept next to the db. regenerable from discord
+#anytime, so it's gitignored (unlike the db, which is the real data)
+def dump_filnam(channel_id:int)->str:
+    return "logdump_" + str(channel_id) + ".jsonl"
+
+#one embed -> (user_id, kind, before, after), or None if it isn't a nickname event.
+#dyno: no title, desc "**<@123> nickname changed**", values as Before/After fields.
+#carl: title "Nickname change/added/removed", values as "**Before:** x" "**+After:** y" lines.
+#both stick "ID: <user id>" in the footer
+def parse_nick_embed(emb:dict):
+    desc = emb.get("description") or ""
+    fields = {f.get("name","").lower(): f.get("value","").strip() for f in emb.get("fields",[])}
+
+    #dyno. "cleared" is dyno's word for removed, unify them. "change" (carl) -> "changed" too
+    dyno = re.search(r"<@(\d+)> nickname (changed|added|removed|cleared)", desc)
+    if dyno:
+        kind = {"change":"changed","cleared":"removed"}.get(dyno.group(2), dyno.group(2))
+        return dyno.group(1), kind, fields.get("before"), fields.get("after")
+
+    if re.fullmatch(r"Nickname (change|added|removed)", (emb.get("title") or "").strip()):
+        uid = re.search(r"ID:\s*(\d+)", emb.get("footer",{}).get("text",""))
+        if uid is None:
+            return None #no id in the footer, no entry (better than guessing who)
+        #the + in carl's "**+After:**" is diff-highlight decoration, not part of the name
+        before = re.search(r"\*\*Before:\*\*\s*(.*)", desc)
+        after = re.search(r"\*\*\+?After:\*\*\s*(.*)", desc)
+        kind = "changed" if "change" in emb["title"].lower() else emb["title"].strip().split()[-1].lower()
+        return uid.group(1), kind, before.group(1).strip() if before else None, after.group(1).strip() if after else None
+
+    return None #message edits, role changes, avatar updates etc — not ours
+
+#which side(s) of an event were actual nicknames. carl's "added" logs the person's plain
+#username as Before — that was never a nickname, so it doesn't go in the nicknames table.
+#"None" gets filtered too: dyno literally writes the word None in the Before/after field
+#when there wasn't one (first nick / nick cleared), and it is not a nickname either
+def nicks_from_event(kind:str, before, after)->list:
+    nicks = [after] if kind == "added" else [before] if kind == "removed" else [before, after]
+    return [n for n in nicks if n and n != "None"]
+
+#records = the dump file's lines (or the live equivalent). both bots report the same
+#change about a second apart, so identical user+before+after within a minute counts once.
+#sorted by time either way, so the timeline comes out chronological
+def events_from_records(records:list)->list:
+    evs = []
+    for rec in records:
+        for emb in rec.get("embeds",[]):
+            parsed = parse_nick_embed(emb)
+            if parsed is None:
+                continue
+            uid, kind, before, after = parsed
+            #make both bots' copies of an event look identical so the dedupe below can
+            #spot them as the same change: dyno writes the literal word None where a
+            #nick was missing, carl writes the plain username on added/removed events —
+            #neither of those is a nickname, so both become a real None here
+            before = None if kind == "added" or before == "None" else before
+            after = None if kind == "removed" or after == "None" else after
+            evs.append({"user_id":uid, "kind":kind, "before":before, "after":after,
+                        "time":rec["time"], "bot":rec.get("bot",""),
+                        "name":(emb.get("author") or {}).get("name")})
+    evs.sort(key=lambda ev: ev["time"])
+    last_seen = {}
+    events = []
+    for ev in evs:
+        key = (ev["user_id"], ev["before"], ev["after"])
+        when = datetime.fromisoformat(ev["time"])
+        if key in last_seen and (when - last_seen[key]).total_seconds() < 60:
+            continue #the other bot's copy of the same change
+        last_seen[key] = when
+        events.append(ev)
+    return events
+
+#walks the entire channel, oldest first so the dump reads chronologically, one json
+#line per message. everything the log bots say lives in embeds, so that's what we keep
+async def download_logs(channel:discord.TextChannel)->tuple:
+    records = []
+    async for msg in channel.history(limit=None, oldest_first=True):
+        records.append({"id":msg.id, "time":msg.created_at.isoformat(), "bot":msg.author.name,
+                        "embeds":[emb.to_dict() for emb in msg.embeds]})
+        if len(records) % 1000 == 0:
+            print(f"downloaded {len(records)} messages so far...") #a full channel can take minutes
+    fil = dump_filnam(channel.id)
+    with open(fil, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return records, fil
+
+def load_log_dump(channel_id:int)->list:
+    with open(dump_filnam(channel_id), encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+#shoves the events into the db. the user needs a Users row first or the foreign key
+#rejects their nicknames (people who left the server were never in Users). names for
+#those are best effort: still around = fresh from the member cache, gone = whatever
+#name the log embed happened to show
+def backfill_into_db(daba:db.dbthingy, events:list, guild)->tuple:
+    known_users = {row[0] for row in daba.rdRecords("Users","user_id","")}
+    known_nicks = {(row[0],row[1]) for row in daba.rdRecords("Nicknames","user_id,nickname","")}
+    users_added = nicks_added = nicks_known = 0
+    for ev in events:
+        uid = ev["user_id"]
+        if uid not in known_users:
+            member = guild.get_member(int(uid)) if guild else None
+            daba.addRecord("Users", db.easy_user_str(uid,
+                member.name if member else (ev["name"] or uid),
+                member.global_name if member else None),
+                ignoredupes=True, commit=False)
+            known_users.add(uid)
+            users_added += 1
+        for nick in nicks_from_event(ev["kind"], ev["before"], ev["after"]):
+            if (uid, nick) in known_nicks:
+                nicks_known += 1
+                continue
+            daba.addRecord("Nicknames", db.easy_nickn_str(uid, nick), commit=False)
+            known_nicks.add((uid, nick))
+            nicks_added += 1
+    daba.save()
+    return users_added, nicks_added, nicks_known
+
+
+#--- showing a user's nicknames in a way a human can read ---
+#the db's nickn_id is global (1, 2, ... 421 across everyone) so per-user it looks like
+#4, 5, 143, 417 — meaningless. what people see instead: their nicknames numbered #1..#N
+#in chronological order. the db has no timestamps (upstream shape), so first-seen dates
+#come from the log dump; the ids stay put underneath and only the display is renumbered
+
+#first time each (user_id, nickname) shows up in the log dump -> local 'YYYY-MM-DD'.
+#parsed once per dump-file version and cached — the dump is 40k messages, nobody wants
+#that re-parsed on every /print_nicknames
+_nick_times = {"mtime": None, "map": {}}
+def nick_first_seen()->dict:
+    try:
+        mtime = os.path.getmtime(dump_filnam(constants.LOG_CHANNEL))
+    except OSError:
+        return {} #no dump: everything is undated, ordering falls back to plain ids
+    if _nick_times["mtime"] == mtime:
+        return _nick_times["map"]
+    seen = {}
+    for ev in events_from_records(load_log_dump(constants.LOG_CHANNEL)):
+        for nick in nicks_from_event(ev["kind"], ev["before"], ev["after"]):
+            seen.setdefault((ev["user_id"], nick), ev["time"])
+    _nick_times["mtime"] = mtime
+    _nick_times["map"] = {key: datetime.fromisoformat(t).astimezone().strftime("%y-%m-%d")
+                          for key, t in seen.items()}
+    return _nick_times["map"]
+
+#one user's nicknames as [(nickn_id, nickname, first_seen_or_None)], oldest first.
+#undated rows go first — no log event means the nick predates the logging (or nobody
+#logged it), which is as good as "old" as we can tell
+def user_nick_rows(daba:db.dbthingy, user)->list:
+    rows = daba.rdRecords("Nicknames","nickn_id,nickname",f"WHERE user_id = {user.id}")
+    seen = nick_first_seen()
+    uid = str(user.id)
+    dated = sorted(((nid, nick, seen[(uid, nick)]) for nid, nick in rows if (uid, nick) in seen),
+                   key=lambda r: (r[2], r[0]))
+    undated = [(nid, nick, None) for nid, nick in rows if (uid, nick) not in seen]
+    return undated + dated
+
+#turns a "#number from print_nicknames" back into a real row (or None if out of range)
+def nick_by_index(daba:db.dbthingy, user, index:int):
+    rows = user_nick_rows(daba, user)
+    return rows[index-1] if 1 <= index <= len(rows) else None
+
+#discord caps a message at 2000 chars and dedicated nick hoarders blow past it,
+#so split the lines into pages and send them one after another
+def chunk_lines(lines:list, cap=1900)->list:
+    pages, cur, size = [], [], 0
+    for line in lines:
+        if cur and size + len(line) + 1 > cap:
+            pages.append("\n".join(cur))
+            cur, size = [], 0
+        cur.append(line)
+        size += len(line) + 1
+    if cur:
+        pages.append("\n".join(cur))
+    return pages or [""]
+
+async def send_paged(interac:discord.Interaction, pages:list, ephemeral:bool):
+    for i, page in enumerate(pages):
+        if i == 0:
+            await interac.response.send_message(page, ephemeral=ephemeral)
+        else:
+            await interac.followup.send(page, ephemeral=ephemeral)
 
 
 #call firstrun
@@ -129,33 +325,53 @@ async def slashdumptable(interac:discord.Interaction):
 #}
 
 #grab nicknames (and ids) of a user
-@tree.command(name="print_nicknames",description="prints all of a user's nicknames",guild=discord.Object(id=constants.GUILD_TOKEN))
+@tree.command(name="print_nicknames",description="prints all of a user's nicknames, numbered #1..#N oldest first",guild=discord.Object(id=constants.GUILD_TOKEN))
 async def slashgetnicks(interac:discord.Interaction, user:discord.Member, private:bool):
-    result =tree.client.daba.rdRecords("Nicknames","nickn_id,nickname",f"WHERE user_id = {user.id}")
-    await interac.response.send_message(result,ephemeral=private)
+    rows = user_nick_rows(tree.client.daba, user)
+    if not rows:
+        await interac.response.send_message(f"{user.display_name} has no nicknames on record", ephemeral=private)
+        return
+    #the #number is the per-user index — that's what explain/add_explanation want now
+    lines = [f"#{i}  {date or '(undated)':<10} {nick}" for i, (_, nick, date) in enumerate(rows, start=1)]
+    header = f"{user.display_name} — {len(rows)} nicknames:"
+    await send_paged(interac, chunk_lines([header, *lines]), ephemeral=private)
 #}
 
 #grab a nickname, and its explanation
-@tree.command(name="explain_nickname",description="explains a nickname",guild=discord.Object(id=constants.GUILD_TOKEN))
-async def slashexplnnick(interac:discord.Interaction, nicknid:int, private:bool):
+@tree.command(name="explain_nickname",description="explains one of a user's nicknames (by its #number from print_nicknames)",guild=discord.Object(id=constants.GUILD_TOKEN))
+async def slashexplnnick(interac:discord.Interaction, user:discord.Member, index:int, private:bool):
     #a sensible person would have just done a join but my design is too fragile for that
-    result =tree.client.daba.rdRecords("Nicknames","nickname",f"WHERE nickn_id = {nicknid}")
-    result +=tree.client.daba.rdRecords("Explanations","explanation",f"WHERE nickn_id = {nicknid}")
-    await interac.response.send_message(result,ephemeral=private)
+    row = nick_by_index(tree.client.daba, user, index)
+    if row is None:
+        await interac.response.send_message(f"#{index}? {user.display_name} doesn't have that many nicknames — check /print_nicknames", ephemeral=private)
+        return
+    nickn_id, nick, date = row
+    expls = tree.client.daba.rdRecords("Explanations","explanation",f"WHERE nickn_id = {nickn_id}")
+    msg = f"#{index} — {nick}" + (f" ({date})" if date else "")
+    if expls:
+        msg += "\n" + "\n".join(f"• {e}" for e, in expls)
+    else:
+        msg += "\nno explanations yet"
+    await interac.response.send_message(msg[:1900], ephemeral=private)
 #}
 
-#add explanation using id
-@tree.command(name="add_explanation",description="add an explanation for a nickname",guild=discord.Object(id=constants.GUILD_TOKEN))
+#add explanation using the per-user #number
+@tree.command(name="add_explanation",description="add an explanation for one of a user's nicknames (by its #number from print_nicknames)",guild=discord.Object(id=constants.GUILD_TOKEN))
 @app_commands.checks.has_role(constants.ROLE)
-async def slashaddexpl(interac:discord.Interaction, nicknid:int, explanation:str):
+async def slashaddexpl(interac:discord.Interaction, user:discord.Member, index:int, explanation:str):
+    row = nick_by_index(tree.client.daba, user, index)
+    if row is None:
+        await interac.response.send_message(f"#{index}? {user.display_name} doesn't have that many nicknames — check /print_nicknames", ephemeral=True)
+        return
+    nickn_id, nick, _ = row
     try:
-        succed = tree.client.daba.addRecord("Explanations",db.easy_expln_str(nicknid,explanation))
+        succed = tree.client.daba.addRecord("Explanations",db.easy_expln_str(nickn_id,explanation))
     except sqlite3.Error as e:
         #typo'd nickn_id trips the foreign key. used to escape and discord would show "did not respond"
         await interac.response.send_message("failed to add (bad characters? blank?)",ephemeral=True)
         return
     if succed:
-        await interac.response.send_message(f"explanation '{explanation}' added",ephemeral=True)
+        await interac.response.send_message(f"explanation added to #{index} '{nick}'",ephemeral=True)
     else:
         #basically only fails on weird characters now (apostrophes work), but don't lie about it
         await interac.response.send_message("failed to add (bad characters? blank?)",ephemeral=True)
@@ -183,6 +399,65 @@ async def slashemergsql(interac:discord.Interaction,query:str):
     #discord caps messages at 2000 chars so butcher anything enormous before it bites us
     msg = f"{mention} raw executed. query: {query}\n{str(result)}"
     await interac.response.send_message(msg[:1900])
+#}
+
+#download an entire channel's history to a file (the log channel by default)
+@tree.command(name="download_logs",description="downloads a whole channel's history to a file for mining",guild=discord.Object(id=constants.GUILD_TOKEN))
+@app_commands.checks.has_role(constants.ROLE)
+async def slashdownloadlogs(interac:discord.Interaction, channel:discord.TextChannel=None):
+    #a full channel takes minutes to walk, defer so discord doesn't give up on us
+    await interac.response.defer(ephemeral=True, thinking=True)
+    if channel is None:
+        channel = interac.client.get_channel(constants.LOG_CHANNEL)
+    if channel is None:
+        await interac.followup.send("can't see that channel (wrong id? no read perms?)", ephemeral=True)
+        return
+    records, fil = await download_logs(channel)
+    events = events_from_records(records)
+    await interac.followup.send(f"dumped {len(records)} messages to {fil}\n"
+                                f"{len(events)} nickname events in there (both bots counted once)", ephemeral=True)
+#}
+
+#recover past nicknames from the logging channel into the db, like the bot had been
+#running since forever. downloads the dump first if it doesn't exist yet
+@tree.command(name="backfill_nicknames",description="recovers past nicknames from the logging channel into the db",guild=discord.Object(id=constants.GUILD_TOKEN))
+@app_commands.checks.has_role(constants.ROLE)
+async def slashbackfill(interac:discord.Interaction, channel:discord.TextChannel=None):
+    await interac.response.defer(ephemeral=True, thinking=True)
+    if channel is None:
+        channel = interac.client.get_channel(constants.LOG_CHANNEL)
+    if channel is None:
+        await interac.followup.send("can't see that channel (wrong id? no read perms?)", ephemeral=True)
+        return
+    if os.path.exists(dump_filnam(channel.id)):
+        records = load_log_dump(channel.id)
+    else:
+        records, _ = await download_logs(channel)
+    events = events_from_records(records)
+    users_added, nicks_added, nicks_known = backfill_into_db(tree.client.daba, events, interac.guild)
+    await interac.followup.send(f"{len(events)} nickname events scanned\n"
+                                f"{nicks_added} old nicknames recovered, {nicks_known} already known\n"
+                                f"{users_added} missing users re-registered (leavers included)", ephemeral=True)
+#}
+
+#a user's nick changes in order, straight from the log dump — the db has no timestamps
+#by design (upstream shape), so the timeline lives in the dump
+@tree.command(name="nickname_history",description="prints a user's nickname changes in order, from the log dump",guild=discord.Object(id=constants.GUILD_TOKEN))
+async def slashnickhistory(interac:discord.Interaction, user:discord.Member, private:bool):
+    try:
+        records = load_log_dump(constants.LOG_CHANNEL)
+    except FileNotFoundError:
+        await interac.response.send_message("no log dump yet — /download_logs first", ephemeral=private)
+        return
+    events = [ev for ev in events_from_records(records) if ev["user_id"] == str(user.id)]
+    if not events:
+        await interac.response.send_message(f"no logged nickname changes for {user.display_name}", ephemeral=private)
+        return
+    #dump stores utc (that's what discord keeps); local date only, no time — keeps
+    #the lines short enough that a chronic nick-flipper still fits a few per page
+    lines = [f"{datetime.fromisoformat(ev['time']).astimezone().strftime('%y-%m-%d')}  {ev['before'] or '(none)'} -> {ev['after'] or '(none)'}" for ev in events]
+    header = f"{user.display_name}'s nickname history:"
+    await send_paged(interac, chunk_lines([header, *lines]), ephemeral=private)
 #}
 
 

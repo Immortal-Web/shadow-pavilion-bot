@@ -23,15 +23,18 @@ def command(name):
 class FakeResponse:
     def __init__(self):
         self.sent = []
+        self.kwargs = []
 
     async def send_message(self, content, **kwargs):
         self.sent.append(content)
+        self.kwargs.append(kwargs)
 
 
 class FakeInterac:
     #duck-typed enough for the command callbacks in bot.py
     def __init__(self, roles=()):
         self.response = FakeResponse()
+        self.followup = FakeResponse()  #paged commands (print_nicknames) overflow into this
         self.guild = SimpleNamespace(roles=list(roles))
 
 
@@ -112,11 +115,120 @@ class CommandTests(unittest.TestCase):
     def test_every_sensitive_command_has_the_role_check(self):
         #has_role only gates at runtime; this catches a decorator going missing again
         src = open("bot.py", encoding="utf-8").read()
-        for name in ("slashgetall", "slashdumptable", "slashaddexpl", "slashemergsql",
-                     "slashdownloadlogs", "slashbackfill"):
+        for name in ("slashgetall", "slashdumptable", "slashaddexpl", "slashemergsql"):
             up_to_def = src[:src.index(f"async def {name}")]
             decorators = up_to_def.split("@tree.command")[-1]
             self.assertIn("has_role", decorators, f"{name} lost its role check")
+
+
+class CommandWiringTests(unittest.TestCase):
+    #the commands that had no callback-level tests: firstrun_init, dump_table,
+    #explain_nickname — plus the "#number means the same thing everywhere" invariant
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.daba = db.dbthingy(os.path.join(self._tmp.name, "t.db"))
+        self.daba.SetupDB()
+        bot.client.daba = self.daba
+        self._original_nfs = bot.nick_first_seen
+        bot.nick_first_seen = lambda: {}  #don't chew through the real 40k-line dump in here
+
+    def tearDown(self):
+        bot.nick_first_seen = self._original_nfs
+        self.daba.finish()
+        self._tmp.cleanup()
+
+    def test_print_nicknames_with_no_nicks_answers_instead_of_silence(self):
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        interac = FakeInterac()
+        run(command("print_nicknames")(interac, SimpleNamespace(id=1, display_name="A"), True))
+        self.assertEqual(len(interac.response.sent), 1)
+        self.assertIn("no nicknames on record", interac.response.sent[0])
+
+    def test_explain_numbering_is_what_print_nicknames_shows(self):
+        #print and explain must speak the same #numbers or people explain the wrong nick
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        for nick in ("new", "mystery", "old"):
+            self.daba.addRecord("Nicknames", db.easy_nickn_str(1, nick))
+        bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
+        user = SimpleNamespace(id=1, display_name="A")
+
+        printed = FakeInterac()
+        run(command("print_nicknames")(printed, user, True))
+        line2 = [l for l in printed.response.sent[0].splitlines() if l.startswith("#2")]
+        self.assertEqual(len(line2), 1)
+        self.assertIn("old", line2[0])
+
+        explained = FakeInterac()
+        run(command("explain_nickname")(explained, user, 2, True))
+        #same nickname, same number, plus the date print promised
+        self.assertIn("#2 — old (25-01-01)", explained.response.sent[0])
+
+    def test_add_then_explain_by_number_round_trips(self):
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
+        user = SimpleNamespace(id=1, display_name="A")
+
+        added = FakeInterac()
+        run(command("add_explanation")(added, user, 1, "he's the man"))
+        self.assertIn("added to #1 'bob'", added.response.sent[0])
+
+        explained = FakeInterac()
+        run(command("explain_nickname")(explained, user, 1, True))
+        self.assertIn("#1 — bob", explained.response.sent[0])
+        self.assertIn("• he's the man", explained.response.sent[0])
+
+    def test_explain_without_explanations_says_so(self):
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
+        interac = FakeInterac()
+        run(command("explain_nickname")(interac, SimpleNamespace(id=1, display_name="A"), 1, True))
+        self.assertIn("no explanations yet", interac.response.sent[0])
+
+    def test_explain_bad_index_gets_an_answer_not_silence(self):
+        self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+        self.daba.addRecord("Nicknames", db.easy_nickn_str(1, "bob"))
+        interac = FakeInterac()
+        run(command("explain_nickname")(interac, SimpleNamespace(id=1, display_name="A"), 5, True))
+        self.assertIn("doesn't have that many", interac.response.sent[0])
+
+    def test_firstrun_init_command_actually_sets_up(self):
+        original_dbfil = db.DB_FILENAM
+        original_get_guild = bot.client.get_guild
+        db.DB_FILENAM = os.path.join(self._tmp.name, "firstrun.db")
+        #firstRun_setup closes whatever daba it finds on the client, so hand it a
+        #throwaway instead of the shared one (tearDown still wants to close that)
+        throwaway = db.dbthingy(os.path.join(self._tmp.name, "throwaway.db"))
+        bot.client.daba = throwaway
+        bot.client.get_guild = lambda gid: SimpleNamespace(members=[
+            SimpleNamespace(id=1, name="a", global_name="A", nick="ace"),
+            SimpleNamespace(id=2, name="b", global_name=None, nick=None),  #nickless: skipped
+        ])
+        try:
+            interac = FakeInterac()
+            run(command("firstrun_init")(interac))
+            self.assertIn("setup complete", interac.response.sent[0])
+            users = bot.client.daba.rdRecords("Users", "user_id", "ORDER BY user_id")
+            self.assertEqual(users, [("1",), ("2",)])
+            nicks = bot.client.daba.rdRecords("Nicknames", "nickname", "")
+            self.assertEqual(nicks, [("ace",)])  #no 'None' row for the nickless one
+        finally:
+            bot.client.daba.finish()
+            bot.client.daba = self.daba
+            bot.client.get_guild = original_get_guild
+            db.DB_FILENAM = original_dbfil
+
+    def test_dump_table_sends_the_db_file(self):
+        original_dbfil = constants.DB_FILENAM
+        constants.DB_FILENAM = os.path.join(self._tmp.name, "t.db")  #exists — setUp made it
+        try:
+            interac = FakeInterac()
+            run(command("dump_table")(interac))
+            self.assertEqual(len(interac.response.sent), 1)
+            attachment = interac.response.kwargs[0]["file"]
+            self.assertEqual(attachment.filename, "nicknames.db")
+            self.assertTrue(interac.response.kwargs[0]["ephemeral"])
+        finally:
+            constants.DB_FILENAM = original_dbfil
 
 
 if __name__ == "__main__":

@@ -27,13 +27,10 @@ All commands only exist in the configured guild. "Role-gated" = requires the rol
 | `/add_explanation user index explanation` | Attach an explanation to one of a user's nicknames (by its `#`number) | yes |
 | `/dump_table` | Send the raw `nicknames.db` file | no |
 | `/direct_sql query` | Run arbitrary SQL against the database | yes |
-| `/download_logs [channel]` | Dump a channel's entire history to `logdump_<id>.jsonl` (defaults to the configured logging channel) | yes |
-| `/backfill_nicknames [channel]` | Parse the dump's Dyno/Carl-bot nickname logs into the database as past nicknames | yes |
-| `/nickname_history user private` | Print a user's nickname changes in chronological order from the dump | no |
 
-The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. `/download_logs` archives that channel (the Message Content intent is required for this), `/backfill_nicknames` recovers every old nickname out of it into the database, and `/nickname_history` shows the timeline (the database has no timestamps by design, so order comes from the dump).
+The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. A one-time archive of that channel (`logdump_<id>.jsonl`, gitignored) was mined for every past nickname; those are already in the database, and the commands that did the mining were one-shot and have been removed. The dump file still earns its keep though: the database has no timestamps by design, so it's what puts a user's nicknames in chronological order with first-seen dates.
 
-The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames the log dump never saw a change for sort first with an `(undated)` marker.
+The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames the log dump never saw a change for sort first with an `(undated)` marker — on a fresh clone with no dump file, everything shows as undated.
 
 ## Files
 

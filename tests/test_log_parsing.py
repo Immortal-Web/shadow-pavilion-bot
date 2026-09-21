@@ -3,7 +3,6 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
 
 import discord
 
@@ -127,46 +126,6 @@ class EventsTests(unittest.TestCase):
         self.assertIsNone(events[0]["before"])
 
 
-class BackfillTests(unittest.TestCase):
-    def test_backfill_inserts_users_then_nicknames_and_skips_knowns(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            daba = db.dbthingy(os.path.join(tmp, "t.db"))
-            daba.SetupDB()
-            events = bot.events_from_records([
-                record([dyno_emb("42", "Old", "New", author="leaver")]),
-                record([carl_emb("42", "New", "Newer")]),
-                record([carl_emb("42", "leaver", "First", title="Nickname added")]),
-            ])
-
-            users, added, known = bot.backfill_into_db(daba, events, None)
-            self.assertEqual(users, 1)  #42 was never in Users (they left)
-            #Old, New, Newer, First — "leaver" the username isn't one. "New" shows up in
-            #two events (after of the first, before of the second) so it's met twice
-            self.assertEqual((added, known), (4, 1))
-            #leaver got a Users row or the foreign key would've rejected everything
-            self.assertEqual(daba.rdRecords("Users", "username", "WHERE user_id = '42'"), [("leaver",)])
-            self.assertEqual(sorted(n for _, n in daba.rdRecords("Nicknames", "user_id,nickname", "WHERE user_id = '42'")),
-                             sorted(["Old", "New", "Newer", "First"]))
-
-            #second run: nothing inserted, and "New"'s double encounter now counts too
-            users2, added2, known2 = bot.backfill_into_db(daba, events, None)
-            self.assertEqual((users2, added2, known2), (0, 0, 5))
-            daba.finish()
-
-    def test_current_member_gets_fresh_names(self):
-        class FakeGuild:
-            def get_member(self, uid):
-                return type("M", (), {"name": "fresh_name", "global_name": "Fresh Display"})()
-        with tempfile.TemporaryDirectory() as tmp:
-            daba = db.dbthingy(os.path.join(tmp, "t.db"))
-            daba.SetupDB()
-            events = bot.events_from_records([record([dyno_emb("7", "A", "B", author="stale_log_name")])])
-            bot.backfill_into_db(daba, events, FakeGuild())
-            self.assertEqual(daba.rdRecords("Users", "username, display_name", "WHERE user_id = '7'"),
-                             [("fresh_name", "Fresh Display")])
-            daba.finish()
-
-
 class PrettyDisplayTests(unittest.TestCase):
     #enough of discord.Interaction for the print_nicknames callback: response for
     #page one, followup for the overflow pages
@@ -246,38 +205,6 @@ class PrettyDisplayTests(unittest.TestCase):
             finally:
                 bot.nick_first_seen = original
             daba.finish()
-
-    def test_nickname_history_short_dates_and_no_truncation(self):
-        #dates come out as YY-MM-DD with no time, long histories page instead of
-        #getting their tail chopped off by discord's message cap
-        with tempfile.TemporaryDirectory() as tmp:
-            original = bot.dump_filnam
-            try:
-                bot.dump_filnam = lambda cid: os.path.join(tmp, "dump.jsonl")
-                #one flip-flopper: 60 changes of ~40 chars each overflows one page
-                recs = []
-                for i in range(60):
-                    recs.append(record([dyno_emb("9", f"Nick Number {i:02d}", f"Nick Number {i+1:02d}")],
-                                       time=f"2026-05-01T00:{i:02d}:00.000000+00:00", mid=i))
-                recs.append(record([dyno_emb("9", "Last One", "None")],  #a removal -> (none)
-                                   time="2026-05-02T00:00:00.000000+00:00", mid=999))
-                with open(bot.dump_filnam(0), "w", encoding="utf-8") as f:
-                    for rec in recs:
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-                interac = self.FakeInterac()
-                run = asyncio.run(command("nickname_history")(
-                    interac, type("U", (), {"id": 9, "display_name": "Flipper"})(), True))
-                self.assertGreaterEqual(len(interac.followup.sent), 1)  #paged, not butchered
-                everything = "\n".join(interac.response.sent + interac.followup.sent)
-                #expected date computed the same way the command does (host timezone)
-                expected = datetime.fromisoformat("2026-05-01T00:00:00+00:00").astimezone().strftime("%y-%m-%d")
-                self.assertIn(f"{expected}  Nick Number 00 -> Nick Number 01", everything)
-                self.assertIn("Last One -> (none)", everything)  #last line survives, no tail chop
-                self.assertNotIn(":", everything.split("\n")[1].split("  ")[0])  #no HH:MM in the date column
-            finally:
-                bot.dump_filnam = original
-
 
 class DumpRoundtripTests(unittest.TestCase):
     def test_dump_file_loads_back_and_parses(self):

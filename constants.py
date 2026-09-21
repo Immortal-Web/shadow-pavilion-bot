@@ -25,8 +25,9 @@ GUILD_TOKEN  = int(os.environ.get("GUILD_TOKEN", "2")) #i forget where you find 
 
 ROLE = "Shadow pavilion"
 
-#the dyno/carl-bot logging channel we mine for past nicknames (the bot only ever sees
-#changes from its own start date, but those two have been logging everything forever).
+#the dyno/carl-bot logging channel. the mining commands are gone, but the dump file they
+#left behind (logdump_<this id>.jsonl) is still what dates and orders everyone's
+#nicknames in /print_nicknames, so the id stays.
 #not a secret — it's an id, worst case someone points their own bot at a channel they can't read
 LOG_CHANNEL:int = int(os.environ.get("LOG_CHANNEL", "1404266860937216082"))
 

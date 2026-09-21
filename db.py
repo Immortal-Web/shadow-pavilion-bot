@@ -31,6 +31,10 @@ class dbthingy:
 
     def finish(self):
         self.cnctn.commit()
+        #close the cursor too: a statement that errored (fk violations etc) stays
+        #unfinalized otherwise, and on windows that keeps the db file locked even
+        #after the connection closes. ask me how I know
+        self.crsr.close()
         self.cnctn.close()
         #this should be good enough I think?
 

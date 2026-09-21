@@ -36,6 +36,7 @@ class botman(discord.Client):
         #might? take a while?
         for member in self.get_guild(constants.GUILD_TOKEN).members:
             self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name)) 
+            self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick))
         #}
     #}
 

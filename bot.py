@@ -55,7 +55,7 @@ class botman(discord.Client):
     #old code opened a fresh sqlite connection and re-synced commands each time. oops)
     async def setup_hook(self):
         self.daba = db.dbthingy(db.DB_FILENAM)
-        self.daba.SetupDB() #if-not-exists + migration, safe every boot
+        self.daba.SetupDB() #if-not-exists, safe every boot
 
         #you have to like sync it otherwise testing gets annoying cus it takes too long
         #but this limits it to 1 server? ah well whatever

@@ -51,7 +51,6 @@ __NICKN_SQLCOM:str ='''
                         nickn_id INTEGER PRIMARY KEY,
                         user_id varchar(35),
                         nickname varchar(35),
-                        changed_at TEXT,
                         FOREIGN KEY (user_id) REFERENCES Users(user_id)
                     );
                 '''
@@ -64,11 +63,8 @@ __EXPLN_SQLCOM:str = '''
                     );
                 '''
 
-#one index so print_nicknames doesn't full-scan the table every time
-NICKN_INDEX_SQLCOM:str = "CREATE INDEX IF NOT EXISTS idx_nicknames_user_id ON Nicknames(user_id);"
-
 __USERS_TABLE_REGEX:str = r"^\(([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"    #beautiful isn't it?
-__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL),datetime\('now'\)\)$"            #lmao
+__NICKN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),([\"\'].+[\"\']|NULL),([\"\'].+[\"\']|NULL)\)$"            #lmao
 __EXPLN_TABLE_REGEX:str = r"^\(([0-9]+|NULL),[0-9]+,([\"\'].+[\"\']|NULL)\)$"  #regexes are actually op
 
 #anyway this all isn't strictly necessary its just my way of ensuring that if you add more tables

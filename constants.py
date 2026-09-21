@@ -1,9 +1,27 @@
 #constants because this is apparently how you do it in python? I think?
 #idk there's no #defs so...
 
+import os
+
+#secrets live in .env (gitignored) or actual environment variables — never in here,
+#this file is committed. real env vars win over .env, .env wins over the placeholders.
+#(.env is relative like DB_FILENAM below, so start the bot from the repo dir —
+#start_bot.bat already does that)
+def __load_env():
+    try:
+        with open(".env") as envfil:
+            for line in envfil:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass #no .env? fine, env vars or placeholders it is
+__load_env()
+
 #bot thingies
-BOT_TOKEN :str = 'i forget where you find this'
-GUILD_TOKEN  = 2 #i forget where you find this either
+BOT_TOKEN :str = os.environ.get("BOT_TOKEN", 'i forget where you find this')
+GUILD_TOKEN  = int(os.environ.get("GUILD_TOKEN", "2")) #i forget where you find this either
 
 ROLE = "Shadow pavilion"
 

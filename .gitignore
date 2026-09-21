@@ -3,3 +3,4 @@ __pycache__/
 *.lnk
 .env
 logdump_*.jsonl
+nicknames.db

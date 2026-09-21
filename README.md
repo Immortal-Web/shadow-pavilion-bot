@@ -38,7 +38,7 @@ The `#numbers` shown by `/print_nicknames` are per-user positions in that chrono
 - `constants.py` — all config (token, guild, role) plus the table definitions (`TABLE_GEN`)
 - `db.py` — `dbthingy`, a thin sqlite3 wrapper
 - `testbot.py` — old scratch version, fully commented out. Ignore it.
-- `nicknames.db` — the SQLite database
+- `nicknames.db` — the SQLite database (created on first run, **gitignored**: it holds real member data)
 
 > **Warning:** running `python db.py` directly executes an embedded test that **drops all tables**. Don't.
 

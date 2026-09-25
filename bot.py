@@ -352,7 +352,8 @@ async def slashgetnicks(interac:discord.Interaction, user:discord.Member, privat
     #the #number is the per-user index — that's what explain/add_explanation want now
     width = len(str(len(rows)))
     lines = [nick_line(i, nick, date, width) for i, (_, nick, date) in enumerate(rows, start=1)]
-    title = f"{user.display_name} — {len(rows)} nicknames"
+    #title uses the discord username, not the nickname — nicknames change, that's the whole point of this bot
+    title = f"{user.name} — {len(rows)} nicknames"
     #embed descriptions fit ~4x a plain message, so normal users get one response;
     #chunk_lines still catches the freak hoarders
     await send_paged_embeds(interac, chunk_lines(lines, cap=EMBED_CAP), title, ephemeral=private)

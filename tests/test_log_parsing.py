@@ -225,11 +225,11 @@ class PrettyDisplayTests(unittest.TestCase):
             try:
                 bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
                 interac = self.FakeInterac()
-                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "name": "seleste.uh", "display_name": "A"})(), True))
                 self.assertEqual(len(interac.response.embeds), 1)  #one embed, one response
                 self.assertEqual(interac.followup.embeds, [])
                 emb = interac.response.embeds[0]
-                self.assertEqual(emb.title, "A — 3 nicknames")
+                self.assertEqual(emb.title, "seleste.uh — 3 nicknames")  #username, not nickname
                 #dated rows first (oldest #1), the undated one brings up the rear
                 self.assertIn("`#1` `25-01-01` old", emb.description)
                 self.assertIn("`#2` `26-01-01` new", emb.description)
@@ -251,12 +251,12 @@ class PrettyDisplayTests(unittest.TestCase):
             try:
                 bot.nick_first_seen = lambda: {}
                 interac = self.FakeInterac()
-                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "name": "seleste.uh", "display_name": "A"})(), True))
                 embeds = interac.response.embeds + interac.followup.embeds
                 self.assertGreater(len(embeds), 1)
                 for emb in embeds:
                     self.assertLessEqual(len(emb.description), 4096)
-                    self.assertIn("A — 120 nicknames · ", emb.title)
+                    self.assertIn("seleste.uh — 120 nicknames · ", emb.title)
                 #every index survives the split exactly once, zero-padded to width 3.
                 #all undated, so they sit in db-insertion order — #001 is nickname number 0
                 body = "\n".join(emb.description for emb in embeds)

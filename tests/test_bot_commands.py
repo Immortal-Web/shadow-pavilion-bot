@@ -159,7 +159,7 @@ class CommandWiringTests(unittest.TestCase):
         for nick in ("new", "mystery", "old"):
             self.daba.addRecord("Nicknames", db.easy_nickn_str(1, nick))
         bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
-        user = SimpleNamespace(id=1, display_name="A")
+        user = SimpleNamespace(id=1, name="a", display_name="A")
 
         printed = FakeInterac()
         run(command("print_nicknames")(printed, user, True))

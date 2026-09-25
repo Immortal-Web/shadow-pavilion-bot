@@ -24,10 +24,19 @@ class FakeResponse:
     def __init__(self):
         self.sent = []
         self.kwargs = []
+        self.embeds = []
 
-    async def send_message(self, content, **kwargs):
+    async def send_message(self, content=None, **kwargs):
         self.sent.append(content)
         self.kwargs.append(kwargs)
+        if kwargs.get("embed") is not None:
+            self.embeds.append(kwargs["embed"])
+
+    async def send(self, content=None, **kwargs):  #followup pages land here
+        self.sent.append(content)
+        self.kwargs.append(kwargs)
+        if kwargs.get("embed") is not None:
+            self.embeds.append(kwargs["embed"])
 
 
 class FakeInterac:
@@ -154,7 +163,8 @@ class CommandWiringTests(unittest.TestCase):
 
         printed = FakeInterac()
         run(command("print_nicknames")(printed, user, True))
-        line1 = [l for l in printed.response.sent[0].splitlines() if l.startswith("#1")]
+        desc = printed.response.embeds[0].description
+        line1 = [l for l in desc.splitlines() if l.startswith("`#1`")]
         self.assertEqual(len(line1), 1)
         self.assertIn("old", line1[0])
 

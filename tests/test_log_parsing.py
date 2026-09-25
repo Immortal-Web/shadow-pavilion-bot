@@ -134,12 +134,17 @@ class PrettyDisplayTests(unittest.TestCase):
         class Sink:
             def __init__(self):
                 self.sent = []
+                self.embeds = []
 
-            async def send_message(self, content, **kwargs):
+            async def send_message(self, content=None, **kwargs):
                 self.sent.append(content)
+                if kwargs.get("embed") is not None:
+                    self.embeds.append(kwargs["embed"])
 
-            async def send(self, content, **kwargs):
+            async def send(self, content=None, **kwargs):
                 self.sent.append(content)
+                if kwargs.get("embed") is not None:
+                    self.embeds.append(kwargs["embed"])
 
         def __init__(self):
             self.response = self.Sink()
@@ -157,6 +162,27 @@ class PrettyDisplayTests(unittest.TestCase):
         pages = bot.chunk_lines(["x" * 1000, "y" * 1000, "z"], cap=1900)
         self.assertEqual(len(pages), 2)
         self.assertTrue(all(len(p) <= 1900 for p in pages))
+
+    def test_nick_line_renders_pills_and_pads(self):
+        self.assertEqual(bot.nick_line(2, "old", "25-01-01", 1), "`#2` `25-01-01` old")
+        self.assertEqual(bot.nick_line(2, "old", None, 2), "`#02` `(undated)` old")
+
+    def test_send_paged_embeds_titles_and_overflow(self):
+        interac = self.FakeInterac()
+        asyncio.run(bot.send_paged_embeds(interac, ["page one", "page two"], "A — 9 nicknames", True))
+        self.assertEqual(len(interac.response.embeds), 1)
+        self.assertEqual(len(interac.followup.embeds), 1)
+        first, second = interac.response.embeds[0], interac.followup.embeds[0]
+        self.assertEqual(first.title, "A — 9 nicknames · 1/2")
+        self.assertEqual(first.description, "page one")
+        self.assertEqual(second.title, "A — 9 nicknames · 2/2")
+        self.assertEqual(second.description, "page two")
+
+    def test_send_paged_embeds_single_page_has_no_counter(self):
+        interac = self.FakeInterac()
+        asyncio.run(bot.send_paged_embeds(interac, ["only"], "A — 3 nicknames", False))
+        self.assertEqual(interac.response.embeds[0].title, "A — 3 nicknames")
+        self.assertEqual(interac.followup.embeds, [])
 
     def test_user_nick_rows_orders_chronological_then_undated(self):
         #undated rows are the NEWEST ones now (set after the dump got taken), so they
@@ -199,13 +225,43 @@ class PrettyDisplayTests(unittest.TestCase):
             try:
                 bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
                 interac = self.FakeInterac()
-                run = asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
-                self.assertEqual(len(interac.response.sent), 1)
-                page = interac.response.sent[0]
-                self.assertIn("3 nicknames", page)
-                self.assertIn("#1  25-01-01   old", page)
-                self.assertIn("#2  26-01-01   new", page)
-                self.assertIn("#3  (undated)  mystery", page)
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                self.assertEqual(len(interac.response.embeds), 1)  #one embed, one response
+                self.assertEqual(interac.followup.embeds, [])
+                emb = interac.response.embeds[0]
+                self.assertEqual(emb.title, "A — 3 nicknames")
+                #dated rows first (oldest #1), the undated one brings up the rear
+                self.assertIn("`#1` `25-01-01` old", emb.description)
+                self.assertIn("`#2` `26-01-01` new", emb.description)
+                self.assertIn("`#3` `(undated)` mystery", emb.description)
+            finally:
+                bot.nick_first_seen = original
+            daba.finish()
+
+    def test_print_nicknames_overflow_paginates_as_embeds(self):
+        #a dedicated hoarder: enough long nicknames to blow past EMBED_CAP
+        with tempfile.TemporaryDirectory() as tmp:
+            daba = db.dbthingy(os.path.join(tmp, "t.db"))
+            daba.SetupDB()
+            daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+            for i in range(120):
+                daba.addRecord("Nicknames", db.easy_nickn_str(1, f"nickname number {i} " + "x" * 20))
+            bot.client.daba = daba
+            original = bot.nick_first_seen
+            try:
+                bot.nick_first_seen = lambda: {}
+                interac = self.FakeInterac()
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                embeds = interac.response.embeds + interac.followup.embeds
+                self.assertGreater(len(embeds), 1)
+                for emb in embeds:
+                    self.assertLessEqual(len(emb.description), 4096)
+                    self.assertIn("A — 120 nicknames · ", emb.title)
+                #every index survives the split exactly once, zero-padded to width 3.
+                #all undated, so they sit in db-insertion order — #001 is nickname number 0
+                body = "\n".join(emb.description for emb in embeds)
+                for i in range(1, 121):
+                    self.assertEqual(body.count(f"`#{i:03}`"), 1)
             finally:
                 bot.nick_first_seen = original
             daba.finish()

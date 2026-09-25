@@ -259,12 +259,31 @@ def chunk_lines(lines:list, cap=1900)->list:
         pages.append("\n".join(cur))
     return pages or [""]
 
+#embed descriptions fit 4096 chars, way past the 2000 a plain message gets —
+#3900 leaves breathing room for the odd long line
+EMBED_CAP = 3900
+
+#one nickname -> one display line. the #number and the date render as inline-code
+#pills so the nickname itself stays the visually distinct part. width zero-pads
+#the number so columns line up (#01..#55, not #1..#55)
+def nick_line(index:int, nick:str, date, width:int)->str:
+    return f"`#{index:0{width}}` `{date or '(undated)'}` {nick}"
+
 async def send_paged(interac:discord.Interaction, pages:list, ephemeral:bool):
     for i, page in enumerate(pages):
         if i == 0:
             await interac.response.send_message(page, ephemeral=ephemeral)
         else:
             await interac.followup.send(page, ephemeral=ephemeral)
+
+async def send_paged_embeds(interac:discord.Interaction, pages:list, title:str, ephemeral:bool):
+    for i, page in enumerate(pages):
+        emb = discord.Embed(title=title + (f" · {i+1}/{len(pages)}" if len(pages) > 1 else ""),
+                            description=page)
+        if i == 0:
+            await interac.response.send_message(embed=emb, ephemeral=ephemeral)
+        else:
+            await interac.followup.send(embed=emb, ephemeral=ephemeral)
 
 
 #call firstrun

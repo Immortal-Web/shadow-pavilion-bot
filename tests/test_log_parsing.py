@@ -133,12 +133,17 @@ class PrettyDisplayTests(unittest.TestCase):
         class Sink:
             def __init__(self):
                 self.sent = []
+                self.embeds = []
 
-            async def send_message(self, content, **kwargs):
+            async def send_message(self, content=None, **kwargs):
                 self.sent.append(content)
+                if kwargs.get("embed") is not None:
+                    self.embeds.append(kwargs["embed"])
 
-            async def send(self, content, **kwargs):
+            async def send(self, content=None, **kwargs):
                 self.sent.append(content)
+                if kwargs.get("embed") is not None:
+                    self.embeds.append(kwargs["embed"])
 
         def __init__(self):
             self.response = self.Sink()
@@ -156,6 +161,27 @@ class PrettyDisplayTests(unittest.TestCase):
         pages = bot.chunk_lines(["x" * 1000, "y" * 1000, "z"], cap=1900)
         self.assertEqual(len(pages), 2)
         self.assertTrue(all(len(p) <= 1900 for p in pages))
+
+    def test_nick_line_renders_pills_and_pads(self):
+        self.assertEqual(bot.nick_line(2, "old", "25-01-01", 1), "`#2` `25-01-01` old")
+        self.assertEqual(bot.nick_line(2, "old", None, 2), "`#02` `(undated)` old")
+
+    def test_send_paged_embeds_titles_and_overflow(self):
+        interac = self.FakeInterac()
+        run = asyncio.run(bot.send_paged_embeds(interac, ["page one", "page two"], "A — 9 nicknames", True))
+        self.assertEqual(len(interac.response.embeds), 1)
+        self.assertEqual(len(interac.followup.embeds), 1)
+        first, second = interac.response.embeds[0], interac.followup.embeds[0]
+        self.assertEqual(first.title, "A — 9 nicknames · 1/2")
+        self.assertEqual(first.description, "page one")
+        self.assertEqual(second.title, "A — 9 nicknames · 2/2")
+        self.assertEqual(second.description, "page two")
+
+    def test_send_paged_embeds_single_page_has_no_counter(self):
+        interac = self.FakeInterac()
+        asyncio.run(bot.send_paged_embeds(interac, ["only"], "A — 3 nicknames", False))
+        self.assertEqual(interac.response.embeds[0].title, "A — 3 nicknames")
+        self.assertEqual(interac.followup.embeds, [])
 
     def test_user_nick_rows_orders_undated_then_chronological(self):
         with tempfile.TemporaryDirectory() as tmp:

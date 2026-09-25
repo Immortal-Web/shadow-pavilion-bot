@@ -269,13 +269,6 @@ EMBED_CAP = 3900
 def nick_line(index:int, nick:str, date, width:int)->str:
     return f"`#{index:0{width}}` `{date or '(undated)'}` {nick}"
 
-async def send_paged(interac:discord.Interaction, pages:list, ephemeral:bool):
-    for i, page in enumerate(pages):
-        if i == 0:
-            await interac.response.send_message(page, ephemeral=ephemeral)
-        else:
-            await interac.followup.send(page, ephemeral=ephemeral)
-
 async def send_paged_embeds(interac:discord.Interaction, pages:list, title:str, ephemeral:bool):
     for i, page in enumerate(pages):
         emb = discord.Embed(title=title + (f" · {i+1}/{len(pages)}" if len(pages) > 1 else ""),
@@ -310,9 +303,12 @@ async def slashgetnicks(interac:discord.Interaction, user:discord.Member, privat
         await interac.response.send_message(f"{user.display_name} has no nicknames on record", ephemeral=private)
         return
     #the #number is the per-user index — that's what explain/add_explanation want now
-    lines = [f"#{i}  {date or '(undated)':<10} {nick}" for i, (_, nick, date) in enumerate(rows, start=1)]
-    header = f"{user.display_name} — {len(rows)} nicknames:"
-    await send_paged(interac, chunk_lines([header, *lines]), ephemeral=private)
+    width = len(str(len(rows)))
+    lines = [nick_line(i, nick, date, width) for i, (_, nick, date) in enumerate(rows, start=1)]
+    title = f"{user.display_name} — {len(rows)} nicknames"
+    #embed descriptions fit ~4x a plain message, so normal users get one response;
+    #chunk_lines still catches the freak hoarders
+    await send_paged_embeds(interac, chunk_lines(lines, cap=EMBED_CAP), title, ephemeral=private)
 #}
 
 #grab a nickname, and its explanation

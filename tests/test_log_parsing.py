@@ -221,13 +221,41 @@ class PrettyDisplayTests(unittest.TestCase):
             try:
                 bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
                 interac = self.FakeInterac()
-                run = asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
-                self.assertEqual(len(interac.response.sent), 1)
-                page = interac.response.sent[0]
-                self.assertIn("3 nicknames", page)
-                self.assertIn("#1  (undated)  mystery", page)
-                self.assertIn("#2  25-01-01   old", page)
-                self.assertIn("#3  26-01-01   new", page)
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                self.assertEqual(len(interac.response.embeds), 1)  #one embed, one response
+                self.assertEqual(interac.followup.embeds, [])
+                emb = interac.response.embeds[0]
+                self.assertEqual(emb.title, "A — 3 nicknames")
+                self.assertIn("`#1` `(undated)` mystery", emb.description)
+                self.assertIn("`#2` `25-01-01` old", emb.description)
+                self.assertIn("`#3` `26-01-01` new", emb.description)
+            finally:
+                bot.nick_first_seen = original
+            daba.finish()
+
+    def test_print_nicknames_overflow_paginates_as_embeds(self):
+        #a dedicated hoarder: enough long nicknames to blow past EMBED_CAP
+        with tempfile.TemporaryDirectory() as tmp:
+            daba = db.dbthingy(os.path.join(tmp, "t.db"))
+            daba.SetupDB()
+            daba.addRecord("Users", db.easy_user_str(1, "a", "A"))
+            for i in range(120):
+                daba.addRecord("Nicknames", db.easy_nickn_str(1, f"nickname number {i} " + "x" * 20))
+            bot.client.daba = daba
+            original = bot.nick_first_seen
+            try:
+                bot.nick_first_seen = lambda: {}
+                interac = self.FakeInterac()
+                asyncio.run(command("print_nicknames")(interac, type("U", (), {"id": 1, "display_name": "A"})(), True))
+                embeds = interac.response.embeds + interac.followup.embeds
+                self.assertGreater(len(embeds), 1)
+                for emb in embeds:
+                    self.assertLessEqual(len(emb.description), 4096)
+                    self.assertIn("A — 120 nicknames · ", emb.title)
+                #every index survives the split exactly once, zero-padded to width 3
+                body = "\n".join(emb.description for emb in embeds)
+                for i in range(1, 121):
+                    self.assertEqual(body.count(f"`#{i:03}`"), 1)
             finally:
                 bot.nick_first_seen = original
             daba.finish()

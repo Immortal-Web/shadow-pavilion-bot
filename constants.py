@@ -44,6 +44,11 @@ TITLESHOUT_MSG: str = "{x} hte great {y} blah bla hbal"
     #so I guess I'll just put them here
 DB_FILENAM: str = 'nicknames.db'
 
+#journal of nick changes the bot saw live itself (livenicks.jsonl, gitignored — real
+#member data like the db). the log dump is frozen history; this is what keeps renames
+#from after the dump got taken dated
+LIVE_LOG_FILENAM: str = 'livenicks.jsonl'
+
 #ok so I think I read that __x makes it semi-invisible outside this file? (though i'm still unsure if __ or _ is more proper...)
 __USERS_SQLCOM:str = '''
                     CREATE TABLE IF NOT EXISTS Users(

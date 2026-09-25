@@ -154,14 +154,14 @@ class CommandWiringTests(unittest.TestCase):
 
         printed = FakeInterac()
         run(command("print_nicknames")(printed, user, True))
-        line2 = [l for l in printed.response.sent[0].splitlines() if l.startswith("#2")]
-        self.assertEqual(len(line2), 1)
-        self.assertIn("old", line2[0])
+        line1 = [l for l in printed.response.sent[0].splitlines() if l.startswith("#1")]
+        self.assertEqual(len(line1), 1)
+        self.assertIn("old", line1[0])
 
         explained = FakeInterac()
-        run(command("explain_nickname")(explained, user, 2, True))
+        run(command("explain_nickname")(explained, user, 1, True))
         #same nickname, same number, plus the date print promised
-        self.assertIn("#2 — old (25-01-01)", explained.response.sent[0])
+        self.assertIn("#1 — old (25-01-01)", explained.response.sent[0])
 
     def test_add_then_explain_by_number_round_trips(self):
         self.daba.addRecord("Users", db.easy_user_str(1, "a", "A"))

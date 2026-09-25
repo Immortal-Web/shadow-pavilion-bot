@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 
 import discord
 
@@ -157,7 +158,9 @@ class PrettyDisplayTests(unittest.TestCase):
         self.assertEqual(len(pages), 2)
         self.assertTrue(all(len(p) <= 1900 for p in pages))
 
-    def test_user_nick_rows_orders_undated_then_chronological(self):
+    def test_user_nick_rows_orders_chronological_then_undated(self):
+        #undated rows are the NEWEST ones now (set after the dump got taken), so they
+        #append at the end in db-insertion order instead of camping at #1
         with tempfile.TemporaryDirectory() as tmp:
             daba = db.dbthingy(os.path.join(tmp, "t.db"))
             daba.SetupDB()
@@ -165,18 +168,19 @@ class PrettyDisplayTests(unittest.TestCase):
             daba.addRecord("Nicknames", db.easy_nickn_str(1, "new"))      #first insert, latest date
             daba.addRecord("Nicknames", db.easy_nickn_str(1, "mystery"))  #no dump entry at all
             daba.addRecord("Nicknames", db.easy_nickn_str(1, "old"))      #second insert, oldest date
+            daba.addRecord("Nicknames", db.easy_nickn_str(1, "mystery2")) #undated too, inserted later
             user = type("U", (), {"id": 1, "display_name": "A"})()
             original = bot.nick_first_seen
             try:
                 bot.nick_first_seen = lambda: {("1", "old"): "25-01-01", ("1", "new"): "26-01-01"}
                 rows = bot.user_nick_rows(daba, user)
-                self.assertEqual([r[1] for r in rows], ["mystery", "old", "new"])
-                self.assertEqual([r[2] for r in rows], [None, "25-01-01", "26-01-01"])
+                self.assertEqual([r[1] for r in rows], ["old", "new", "mystery", "mystery2"])
+                self.assertEqual([r[2] for r in rows], ["25-01-01", "26-01-01", None, None])
 
-                #indexing speaks the same order: #1 is the undated one, #3 the newest
-                self.assertEqual(bot.nick_by_index(daba, user, 1)[1], "mystery")
-                self.assertEqual(bot.nick_by_index(daba, user, 3)[1], "new")
-                self.assertIsNone(bot.nick_by_index(daba, user, 4))
+                #indexing speaks the same order: #1 the oldest dated one, undated at the end
+                self.assertEqual(bot.nick_by_index(daba, user, 1)[1], "old")
+                self.assertEqual(bot.nick_by_index(daba, user, 4)[1], "mystery2")
+                self.assertIsNone(bot.nick_by_index(daba, user, 5))
                 self.assertIsNone(bot.nick_by_index(daba, user, 0))
             finally:
                 bot.nick_first_seen = original
@@ -199,12 +203,68 @@ class PrettyDisplayTests(unittest.TestCase):
                 self.assertEqual(len(interac.response.sent), 1)
                 page = interac.response.sent[0]
                 self.assertIn("3 nicknames", page)
-                self.assertIn("#1  (undated)  mystery", page)
-                self.assertIn("#2  25-01-01   old", page)
-                self.assertIn("#3  26-01-01   new", page)
+                self.assertIn("#1  25-01-01   old", page)
+                self.assertIn("#2  26-01-01   new", page)
+                self.assertIn("#3  (undated)  mystery", page)
             finally:
                 bot.nick_first_seen = original
             daba.finish()
+
+class LiveLogTests(unittest.TestCase):
+    #the bot's own journal of renames it saw — what keeps post-dump nicknames dated
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._original_live = constants.LIVE_LOG_FILENAM
+        self._original_dump = bot.dump_filnam
+        self._original_times = bot._nick_times
+        constants.LIVE_LOG_FILENAM = os.path.join(self._tmp.name, "livenicks.jsonl")
+        bot._nick_times = {"dump_mtime": None, "live_mtime": None, "dump_map": {}, "live_map": {}}
+
+    def tearDown(self):
+        constants.LIVE_LOG_FILENAM = self._original_live
+        bot.dump_filnam = self._original_dump
+        bot._nick_times = self._original_times
+        self._tmp.cleanup()
+
+    def test_log_live_event_writes_a_jsonl_event_per_rename(self):
+        bot.log_live_event(7, None, "first nick")        #first-ever nick: before is None
+        bot.log_live_event(7, "first nick", "it's second")
+        with open(constants.LIVE_LOG_FILENAM, encoding="utf-8") as f:
+            evs = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual([e["before"] for e in evs], [None, "first nick"])
+        self.assertEqual([e["after"] for e in evs], ["first nick", "it's second"])
+        self.assertEqual(evs[0]["user_id"], "7")         #string, same as the dump's ids
+        self.assertEqual(evs[0]["kind"], "changed")
+        self.assertIn("time", evs[0])
+
+    def test_load_live_log_tolerates_a_missing_file(self):
+        self.assertEqual(bot.load_live_log(), [])
+
+    def test_nick_first_seen_with_neither_file_present_is_empty(self):
+        bot.dump_filnam = lambda cid: os.path.join(self._tmp.name, "nope.jsonl")
+        self.assertEqual(bot.nick_first_seen(), {})
+
+    def test_nick_first_seen_notices_the_live_log_growing(self):
+        #the cache keys off mtimes, so a fresh rename has to show up without a restart
+        bot.dump_filnam = lambda cid: os.path.join(self._tmp.name, "nope.jsonl")
+        self.assertEqual(bot.nick_first_seen(), {})
+        bot.log_live_event(1, "x", "y")
+        seen = bot.nick_first_seen()
+        self.assertEqual(seen[("1", "y")], datetime.now().astimezone().strftime("%y-%m-%d"))
+
+    def test_nick_first_seen_merges_dump_and_live_log_earliest_wins(self):
+        #dump saw A->B in january, the live log saw B->C today: B keeps its january date
+        bot.dump_filnam = lambda cid: os.path.join(self._tmp.name, f"dump{cid}.jsonl")
+        recs = [record([dyno_emb("1", "A", "B")], time="2026-01-01T00:00:00.000000+00:00")]
+        with open(bot.dump_filnam(constants.LOG_CHANNEL), "w", encoding="utf-8") as f:
+            for rec in recs:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        bot.log_live_event(1, "B", "C")
+        seen = bot.nick_first_seen()
+        self.assertEqual(seen[("1", "A")], "26-01-01")
+        self.assertEqual(seen[("1", "B")], "26-01-01")   #dump's first-seen beats the live one
+        self.assertEqual(seen[("1", "C")], datetime.now().astimezone().strftime("%y-%m-%d"))
+
 
 class DumpRoundtripTests(unittest.TestCase):
     def test_dump_file_loads_back_and_parses(self):

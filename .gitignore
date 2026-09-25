@@ -2,5 +2,7 @@ __pycache__/
 .venv/
 *.lnk
 .env
+env
 logdump_*.jsonl
+livenicks.jsonl
 nicknames.db

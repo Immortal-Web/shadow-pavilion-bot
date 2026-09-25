@@ -28,9 +28,9 @@ All commands only exist in the configured guild. "Role-gated" = requires the rol
 | `/dump_table` | Send the raw `nicknames.db` file | no |
 | `/direct_sql query` | Run arbitrary SQL against the database | yes |
 
-The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. A one-time archive of that channel (`logdump_<id>.jsonl`, gitignored) was mined for every past nickname; those are already in the database, and the commands that did the mining were one-shot and have been removed. The dump file still earns its keep though: the database has no timestamps by design, so it's what puts a user's nicknames in chronological order with first-seen dates.
+The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. A one-time archive of that channel (`logdump_<id>.jsonl`, gitignored) was mined for every past nickname; those are already in the database, and the commands that did the mining were one-shot and have been removed. The dump file still earns its keep though: the database has no timestamps by design, so it's what puts a user's nicknames in chronological order with first-seen dates. The dump is a snapshot, however — nicknames changed after it was taken would never get dated, so the bot also journals every change it sees live into `livenicks.jsonl` (gitignored), and both files are merged for first-seen dates.
 
-The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames the log dump never saw a change for sort first with an `(undated)` marker — on a fresh clone with no dump file, everything shows as undated.
+The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames neither file saw a change for sort last with an `(undated)` marker — those are the newest ones (set after the dump was taken, or missed by everyone); on a fresh clone with neither file, everything shows as undated in database order.
 
 ## Files
 
@@ -39,6 +39,7 @@ The `#numbers` shown by `/print_nicknames` are per-user positions in that chrono
 - `db.py` — `dbthingy`, a thin sqlite3 wrapper
 - `testbot.py` — old scratch version, fully commented out. Ignore it.
 - `nicknames.db` — the SQLite database (created on first run, **gitignored**: it holds real member data)
+- `livenicks.jsonl` — the bot's own journal of nick changes it saw live, used to date renames from after the log dump was taken (created on first rename, **gitignored**: real member data)
 
 > **Warning:** running `python db.py` directly executes an embedded test that **drops all tables**. Don't.
 

@@ -94,6 +94,9 @@ class botman(discord.Client):
         if after.nick != before.nick and after.nick is not None:
             #nick removal isn't a *new* nickname so there's nothing to log (before.nick already had it)
             self.daba.addRecord("Nicknames",db.easy_nickn_str(after.id,after.nick))
+            #journal it too — the dump went stale the day it got taken, this is what
+            #keeps renames from here on dated
+            log_live_event(after.id, before.nick, after.nick)
             print("nickname change detected, added to db")
         if after.name != before.name or after.global_name != before.global_name:
             #username/display name changes: Users is current-state, so just overwrite
@@ -124,7 +127,8 @@ tree = app_commands.CommandTree(client)
 #commands that downloaded the channel and poured the old nicknames into the db were a
 #one-time job and got cut again once it was done — what's left here is the reading
 #half: the dump file they left behind still says when each nickname first showed up,
-#and that's what print_nicknames numbers and sorts everybody by
+#and that's what print_nicknames numbers and sorts everybody by. and since the dump is
+#frozen the day it got taken, the bot journals what it sees from then on itself (below)
 
 #the dump file, kept next to the db. no command makes it anymore, it just gets carried
 #around from the mining days — gitignored (unlike the db, which is the real data)
@@ -202,43 +206,86 @@ def load_log_dump(channel_id:int)->list:
         return [json.loads(line) for line in f if line.strip()]
 
 
+#--- the live half: the dump is frozen history, it can't date anything that happened
+#after it got taken. so the bot journals every nick change it sees itself into its own
+#jsonl (same event shape the dump parses down to) and nick_first_seen merges the two.
+#gitignored like the db — real member data
+def log_live_event(user_id, before, after):
+    rec = {"time": datetime.now().astimezone().isoformat(), "user_id": str(user_id),
+           "kind": "changed", "before": before, "after": after}
+    try:
+        with open(constants.LIVE_LOG_FILENAM, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError as e:
+        #the rename still lands in the db, it'll just show up undated
+        print("couldn't write the live log:", e)
+
+def load_live_log()->list:
+    try:
+        with open(constants.LIVE_LOG_FILENAM, encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except OSError:
+        return [] #no live log yet (fresh clone): nothing the bot has seen itself
+
+
 #--- showing a user's nicknames in a way a human can read ---
 #the db's nickn_id is global (1, 2, ... 421 across everyone) so per-user it looks like
 #4, 5, 143, 417 — meaningless. what people see instead: their nicknames numbered #1..#N
 #in chronological order. the db has no timestamps (upstream shape), so first-seen dates
 #come from the log dump; the ids stay put underneath and only the display is renumbered
 
-#first time each (user_id, nickname) shows up in the log dump -> local 'YYYY-MM-DD'.
-#parsed once per dump-file version and cached — the dump is 40k messages, nobody wants
-#that re-parsed on every /print_nicknames
-_nick_times = {"mtime": None, "map": {}}
+#first time each (user_id, nickname) shows up -> local 'YYYY-MM-DD'. two sources: the
+#frozen dump (everything the logging bots saw up to the day it got taken) and the live
+#log (everything this bot saw since). each side is parsed once per file version and
+#cached — the dump is 40k messages, nobody wants that re-parsed on every /print_nicknames
+_nick_times = {"dump_mtime": None, "live_mtime": None, "dump_map": {}, "live_map": {}}
 def nick_first_seen()->dict:
     try:
-        mtime = os.path.getmtime(dump_filnam(constants.LOG_CHANNEL))
+        dump_mtime = os.path.getmtime(dump_filnam(constants.LOG_CHANNEL))
     except OSError:
-        return {} #no dump: everything is undated, ordering falls back to plain ids
-    if _nick_times["mtime"] == mtime:
-        return _nick_times["map"]
-    seen = {}
-    for ev in events_from_records(load_log_dump(constants.LOG_CHANNEL)):
-        for nick in nicks_from_event(ev["kind"], ev["before"], ev["after"]):
-            seen.setdefault((ev["user_id"], nick), ev["time"])
-    _nick_times["mtime"] = mtime
-    _nick_times["map"] = {key: datetime.fromisoformat(t).astimezone().strftime("%y-%m-%d")
-                          for key, t in seen.items()}
-    return _nick_times["map"]
+        dump_mtime = None #no dump: the history side just stays empty, the live log carries on
+    if dump_mtime != _nick_times["dump_mtime"]:
+        seen = {}
+        if dump_mtime is not None:
+            for ev in events_from_records(load_log_dump(constants.LOG_CHANNEL)):
+                for nick in nicks_from_event(ev["kind"], ev["before"], ev["after"]):
+                    seen.setdefault((ev["user_id"], nick), ev["time"])
+        _nick_times["dump_mtime"] = dump_mtime
+        _nick_times["dump_map"] = {key: datetime.fromisoformat(t).astimezone().strftime("%y-%m-%d")
+                                   for key, t in seen.items()}
+    try:
+        live_mtime = os.path.getmtime(constants.LIVE_LOG_FILENAM)
+    except OSError:
+        live_mtime = None
+    if live_mtime != _nick_times["live_mtime"]:
+        seen = {}
+        for ev in load_live_log():
+            for nick in nicks_from_event(ev.get("kind", "changed"), ev.get("before"), ev.get("after")):
+                seen.setdefault((str(ev.get("user_id")), nick), ev["time"])
+        _nick_times["live_mtime"] = live_mtime
+        _nick_times["live_map"] = {key: datetime.fromisoformat(t).astimezone().strftime("%y-%m-%d")
+                                   for key, t in seen.items()}
+    #a nick can show up in both (someone got re-renamed into an old one) — earliest wins
+    firsts = dict(_nick_times["dump_map"])
+    for key, date in _nick_times["live_map"].items():
+        firsts[key] = date if key not in firsts else min(firsts[key], date)
+    return firsts
 
 #one user's nicknames as [(nickn_id, nickname, first_seen_or_None)], oldest first.
-#undated rows go first — no log event means the nick predates the logging (or nobody
-#logged it), which is as good as "old" as we can tell
+#undated rows go LAST, in db-insertion order: post-backfill, the only way a row misses
+#both date sources is that the nick was set after the dump got taken (or while nobody
+#was logging), which makes it the user's newest nick, not an ancient one. (this used to
+#sort them first on a predates-the-logging theory — live renames parked at #1, shifted
+#every other #number and proved that wrong)
 def user_nick_rows(daba:db.dbthingy, user)->list:
     rows = daba.rdRecords("Nicknames","nickn_id,nickname",f"WHERE user_id = {user.id}")
     seen = nick_first_seen()
     uid = str(user.id)
     dated = sorted(((nid, nick, seen[(uid, nick)]) for nid, nick in rows if (uid, nick) in seen),
                    key=lambda r: (r[2], r[0]))
-    undated = [(nid, nick, None) for nid, nick in rows if (uid, nick) not in seen]
-    return undated + dated
+    undated = sorted([(nid, nick, None) for nid, nick in rows if (uid, nick) not in seen],
+                     key=lambda r: r[0])
+    return dated + undated
 
 #turns a "#number from print_nicknames" back into a real row (or None if out of range)
 def nick_by_index(daba:db.dbthingy, user, index:int):

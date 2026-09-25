@@ -17,12 +17,13 @@ A single-guild Discord bot (discord.py, `app_commands` slash commands) that logs
 - `db.py` — `dbthingy`, a thin sqlite3 wrapper. Builds SQL via `str.format`; `addRecord` validates values against each table's regex from `TABLE_GEN` — that regex is the only insert validation.
 - `testbot.py` — dead scratch copy of an earlier version (entire file inside a triple-quoted string). Do not treat it as source of truth and do not sync changes into it.
 - `nicknames.db` — live data file with real member data (ids, names, nicknames). **Gitignored — never commit it** (it was scrubbed from history with a rewrite for exactly that reason). Never delete or overwrite it as part of a change.
+- `livenicks.jsonl` — the bot's journal of nick changes it saw live (appended by `on_member_update`); what dates renames from after the log dump was taken. **Gitignored — real member data, never commit it.**
 
 ## Hard rules
 
 - **Never run `python db.py`** — its `__main__` block DROPs all three tables. Data loss.
 - Never put a real `BOT_TOKEN` in `constants.py`; the file is committed, so it currently holds a placeholder only.
-- Never commit `nicknames.db` or `logdump_*.jsonl` — real member data. Both are gitignored; keep it that way.
+- Never commit `nicknames.db`, `logdump_*.jsonl` or `livenicks.jsonl` — real member data. All are gitignored; keep it that way.
 - `testbot.py` is inert; don't "fix" or run it.
 - No `requirements.txt` exists. If dependency info is ever needed, the sole external dep is `discord.py`.
 

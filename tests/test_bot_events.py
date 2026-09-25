@@ -1,10 +1,12 @@
 import asyncio
+import json
 import os
 import tempfile
 import unittest
 from types import SimpleNamespace
 
 import bot
+import constants
 import db
 
 
@@ -20,8 +22,12 @@ class MemberUpdateTests(unittest.TestCase):
         self.daba.addRecord("Users", db.easy_user_str(1, "oldname", "OldDisp"))
         self.client = bot.botman(intents=bot.intents)
         self.client.daba = self.daba
+        #the live journal goes to a temp file too — never the repo's real one
+        self._original_live = constants.LIVE_LOG_FILENAM
+        constants.LIVE_LOG_FILENAM = os.path.join(self._tmp.name, "livenicks.jsonl")
 
     def tearDown(self):
+        constants.LIVE_LOG_FILENAM = self._original_live
         self.daba.finish()
         self._tmp.cleanup()
 
@@ -34,6 +40,20 @@ class MemberUpdateTests(unittest.TestCase):
         run(self.client.on_member_update(self.member(), self.member(nick="it's new")))
         rows = self.daba.rdRecords("Nicknames", "nickname", "WHERE user_id = '1'")
         self.assertEqual(rows, [("it's new",)])
+
+    def test_nick_change_is_journaled_to_the_live_log(self):
+        #the db has no timestamps, so the journal is what dates this rename later
+        run(self.client.on_member_update(self.member(nick="old"), self.member(nick="new nick")))
+        with open(constants.LIVE_LOG_FILENAM, encoding="utf-8") as f:
+            evs = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual(len(evs), 1)
+        self.assertEqual((evs[0]["user_id"], evs[0]["before"], evs[0]["after"]),
+                         ("1", "old", "new nick"))
+        self.assertIn("time", evs[0])
+
+    def test_nick_removal_is_not_journaled(self):
+        run(self.client.on_member_update(self.member(nick="old"), self.member(nick=None)))
+        self.assertFalse(os.path.exists(constants.LIVE_LOG_FILENAM))
 
     def test_nick_removal_is_not_logged_as_the_word_None(self):
         run(self.client.on_member_update(self.member(nick="old"), self.member(nick=None)))

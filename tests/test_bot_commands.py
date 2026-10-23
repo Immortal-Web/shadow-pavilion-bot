@@ -78,11 +78,11 @@ class CommandTests(unittest.TestCase):
 
     def test_direct_sql_reports_rows(self):
         self.daba.addRecord("Users", db.easy_user_str(1, "bob", "Bob"))
-        interac = FakeInterac(roles=[SimpleNamespace(name=constants.ROLE, mention="@Shadow pavilion")])
+        interac = FakeInterac(roles=[SimpleNamespace(id=1551032804828123166, mention="<@&1551032804828123166>")])
         run(command("direct_sql")(interac, "SELECT username FROM Users"))
         self.assertEqual(len(interac.response.sent), 1)
         self.assertIn("bob", interac.response.sent[0])
-        self.assertIn("@Shadow pavilion", interac.response.sent[0])  #role alert kept
+        self.assertIn("<@&1551032804828123166>", interac.response.sent[0])  #role alert kept
 
     def test_direct_sql_bad_query_gets_an_answer_not_silence(self):
         interac = FakeInterac(roles=[])

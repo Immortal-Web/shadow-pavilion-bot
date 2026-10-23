@@ -11,7 +11,7 @@ A Discord bot that tracks server members' nickname changes in an SQLite database
 3. Edit `constants.py`:
    - `BOT_TOKEN` — from the developer portal, Bot page
    - `GUILD_TOKEN` — your server ID (Discord settings → Advanced → Developer Mode, then right-click the server → Copy Server ID)
-   - `ROLE` — name of the Discord role allowed to use the admin commands
+   - `ROLE` — ID of the Discord role allowed to use the admin commands (enable Developer Mode, then right-click the role → Copy Role ID)
 4. Run it: `python bot.py`
 5. On ready and gateway resume, the bot fetches the current member roster from Discord and fills in missing users and nicknames. `/firstrun_init` is still available as a manual cached-roster scan.
 

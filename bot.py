@@ -227,8 +227,22 @@ def events_from_records(records:list)->list:
     return events
 
 def load_log_dump(channel_id:int)->list:
-    with open(dump_filnam(channel_id), encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+    #errors="replace" + the try: a wrecked line (botched append, truncated write) skips
+    #itself instead of 500-ing the whole command — it just dates nothing. count still
+    #prints so a silently half-readable dump doesn't go unnoticed
+    records = []
+    skipped = 0
+    with open(dump_filnam(channel_id), encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                skipped += 1
+    if skipped:
+        print("log dump:", skipped, "unparseable line(s) skipped")
+    return records
 
 
 #--- the live half: the dump is frozen history, it can't date anything that happened
@@ -447,8 +461,8 @@ async def slashemergsql(interac:discord.Interaction,query:str):
         await interac.response.send_message(f"sql error: {e}",ephemeral=True)
         return
 
-    role = discord.utils.get(interac.guild.roles, name=constants.ROLE)
-    mention = role.mention if role else "@" + constants.ROLE
+    role = discord.utils.get(interac.guild.roles, id=constants.ROLE)
+    mention = role.mention if role else f"<@&{constants.ROLE}>"
 
     if result is None:
         result = "done. no rows."

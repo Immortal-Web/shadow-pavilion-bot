@@ -338,6 +338,23 @@ class DumpRoundtripTests(unittest.TestCase):
             finally:
                 bot.dump_filnam = original  #don't poison other tests
 
+    def test_a_wrecked_line_skips_itself_instead_of_killing_the_load(self):
+        #a botched append (powershell wrote utf-16 into the utf-8 dump once) used to
+        #crash every print_nicknames. bad lines now skip themselves, good ones load
+        with tempfile.TemporaryDirectory() as tmp:
+            original = bot.dump_filnam
+            try:
+                bot.dump_filnam = lambda cid: os.path.join(tmp, f"dump{cid}.jsonl")
+                with open(bot.dump_filnam(5), "wb") as f:
+                    f.write((json.dumps(record([dyno_emb("1", "A", "B")], mid=123)) + "\n").encode("utf-8"))
+                    f.write(b'{\x00"x\x00"\x00: \x001\x00}\n')  #utf-16le-flavored junk, the real crash
+                    f.write(b"\xff\xfe not utf-8 either\n")
+                loaded = bot.load_log_dump(5)
+                self.assertEqual([r["id"] for r in loaded], [123])
+                self.assertEqual(len(bot.events_from_records(loaded)), 1)
+            finally:
+                bot.dump_filnam = original  #don't poison other tests
+
 
 if __name__ == "__main__":
     unittest.main()

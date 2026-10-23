@@ -23,7 +23,7 @@ __load_env()
 BOT_TOKEN :str = os.environ.get("BOT_TOKEN", 'i forget where you find this')
 GUILD_TOKEN  = int(os.environ.get("GUILD_TOKEN", "2")) #i forget where you find this either
 
-ROLE = "Shadow pavilion"
+ROLE = 1551032804828123166
 
 #the dyno/carl-bot logging channel. the mining commands are gone, but the dump file they
 #left behind (logdump_<this id>.jsonl) is still what dates and orders everyone's

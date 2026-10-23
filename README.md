@@ -15,6 +15,8 @@ A Discord bot that tracks server members' nickname changes in an SQLite database
 4. Run it: `python bot.py`
 5. On ready and gateway resume, the bot fetches the current member roster from Discord and fills in missing users and nicknames. `/firstrun_init` is still available as a manual cached-roster scan.
 
+The console logs startup progress, database row counts, command sync, gateway resumes, and reconciliation totals with timestamps. New captures identify the member and nickname; live changes include the old/new names, whether the nickname was new or already known, and whether the live journal write succeeded. Names found by a roster scan are explicitly logged with an unknown rename time.
+
 ## Commands
 
 All commands only exist in the configured guild. "Role-gated" = requires the role set in `constants.py`.

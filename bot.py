@@ -6,6 +6,7 @@
 #okay imma be real I just followed along a tutorial for half of this crap
 #don't get me started on APIs
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -15,6 +16,8 @@ import discord
 from discord import app_commands
 import constants
 import db
+
+logger = logging.getLogger("shadow_pavilion_bot")
 
 #python is so annoying man I hate self.<> sooooo much 
 
@@ -32,6 +35,7 @@ class botman(discord.Client):
     daba:db.dbthingy
 
     def firstRun_setup(self):
+        logger.info("Initial member scan started: guild_id=%s", constants.GUILD_TOKEN)
         #sets up database
         #if we're re-running this, close the old connection instead of leaking it
         #(an abandoned sqlite handle also locks the db file on windows, which is rude)
@@ -45,43 +49,66 @@ class botman(discord.Client):
         #adds all server members to database. might? take a while?
         #ignoredupes so running this twice doesn't die on the primary key,
         #commit=False because one commit at the end beats ten thousand of them
-        for member in self.get_guild(constants.GUILD_TOKEN).members:
+        members = self.get_guild(constants.GUILD_TOKEN).members
+        captured = []
+        for member in members:
             self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True,commit=False)
             #also grab everyone's current nickname while we're at it
             #(skip the nickless — easy_nickn_str would happily store the word 'None')
             if member.nick is not None:
-                self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
+                added = self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
+                if added and self.daba.crsr.rowcount == 1:
+                    captured.append(member)
         #}
         self.daba.save()
+        for member in captured:
+            logger.info("Nickname captured: source=initial_scan user=%s user_id=%s nickname=%r rename_time=unknown",
+                        member.name, member.id, member.nick)
+        logger.info("Initial member scan complete: members=%s new_nicknames=%s", len(members), len(captured))
     #}
 
     #runs exactly once per process, before on_ready (which fires on every reconnect —
     #old code opened a fresh sqlite connection and re-synced commands each time. oops)
     async def setup_hook(self):
-        self.daba = db.dbthingy(db.DB_FILENAM)
-        self.daba.SetupDB() #if-not-exists, safe every boot
+        logger.info("Startup: guild_id=%s database=%s live_journal=%s",
+                    constants.GUILD_TOKEN, os.path.abspath(db.DB_FILENAM), os.path.abspath(constants.LIVE_LOG_FILENAM))
+        try:
+            self.daba = db.dbthingy(db.DB_FILENAM)
+            self.daba.SetupDB() #if-not-exists, safe every boot
+            counts = [self.daba.rdRecords(table, "COUNT(*)", "")[0][0]
+                      for table in ("Users", "Nicknames", "Explanations")]
+            logger.info("Database ready: users=%s nicknames=%s explanations=%s", *counts)
 
-        #you have to like sync it otherwise testing gets annoying cus it takes too long
-        #but this limits it to 1 server? ah well whatever
-        await tree.sync(guild=discord.Object(id=constants.GUILD_TOKEN))
-            #what is tree? good question I dunno.
+            #you have to like sync it otherwise testing gets annoying cus it takes too long
+            #but this limits it to 1 server? ah well whatever
+            logger.info("Syncing slash commands: guild_id=%s", constants.GUILD_TOKEN)
+            await tree.sync(guild=discord.Object(id=constants.GUILD_TOKEN))
+                #what is tree? good question I dunno.
+            logger.info("Startup setup complete: slash commands synced; waiting for ready")
+        except Exception:
+            logger.exception("Startup setup failed")
+            raise
 
     #don't even get me started on async but this is basically when the bot actually loads ready
     async def on_ready(self):
        # self.autoparsing= constants.AUTOPARSE_DEFAULT
         #self.titleshouting=constants.TITLESHOUT_DEFAULT
 
-        print("longged on")
-        await self.reconcile_nicknames()
+        logger.info("Ready: bot=%s guild_id=%s", self.user, constants.GUILD_TOKEN)
+        await self.reconcile_nicknames(source="ready")
     #}
 
     async def on_resumed(self):
-        await self.reconcile_nicknames()
+        logger.info("Gateway session resumed: guild_id=%s", constants.GUILD_TOKEN)
+        await self.reconcile_nicknames(source="resume")
 
-    async def reconcile_nicknames(self):
+    async def reconcile_nicknames(self, source="manual"):
+        logger.info("Nickname reconciliation started: source=%s guild_id=%s; fetching fresh member roster",
+                    source, constants.GUILD_TOKEN)
         guild = self.get_guild(constants.GUILD_TOKEN)
         if guild is None:
-            print("couldn't reconcile nicknames: configured guild not found")
+            logger.warning("Nickname reconciliation skipped: source=%s guild_id=%s; configured guild not found",
+                           source, constants.GUILD_TOKEN)
             return
         try:
             #members is cached and can miss exactly the update we're trying to
@@ -89,13 +116,29 @@ class botman(discord.Client):
             #write transaction (live events still need the db while we wait)
             members = [member async for member in guild.fetch_members(limit=None)]
         except discord.HTTPException as e:
-            print("couldn't fetch members to reconcile nicknames:", e)
+            logger.warning("Nickname reconciliation fetch failed: source=%s guild_id=%s error=%s; retry on next ready/resume",
+                           source, constants.GUILD_TOKEN, e)
             return
+        new_users = 0
+        captured = []
         with self.daba.cnctn:
             for member in members:
-                self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True,commit=False)
+                added = self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True,commit=False)
+                if added and self.daba.crsr.rowcount == 1:
+                    new_users += 1
                 if member.nick is not None:
-                    self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
+                    added = self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
+                    if added and self.daba.crsr.rowcount == 1:
+                        captured.append(member)
+                    elif not added:
+                        logger.warning("Nickname capture rejected: source=%s user_id=%s nickname=%r",
+                                       source, member.id, member.nick)
+        #log captures after the transaction commits, so a rollback never claims success
+        for member in captured:
+            logger.info("Nickname captured: source=%s user=%s user_id=%s nickname=%r rename_time=unknown",
+                        source, member.name, member.id, member.nick)
+        logger.info("Nickname reconciliation complete: source=%s members=%s new_users=%s new_nicknames=%s",
+                    source, len(members), new_users, len(captured))
         #no live journal entry: we saw the current nick, not when it changed.
         #without a real historical event it'll show up as (undated)
 
@@ -121,14 +164,20 @@ class botman(discord.Client):
             first_observed = added and self.daba.crsr.rowcount == 1
             #journal it too — the dump went stale the day it got taken, this is what
             #keeps renames from here on dated
-            log_live_event(after.id, before.nick, after.nick, first_observed=first_observed)
-            print("nickname change detected, added to db")
+            journal_written = log_live_event(after.id, before.nick, after.nick, first_observed=first_observed)
+            result = "new" if first_observed else "already_known" if added else "rejected"
+            log = logger.info if added else logger.warning
+            log("Nickname capture: source=live user=%s user_id=%s before=%r after=%r result=%s journal_written=%s",
+                after.name, after.id, before.nick, after.nick, result, journal_written)
+        elif after.nick != before.nick:
+            logger.info("Nickname removed: user=%s user_id=%s before=%r", after.name, after.id, before.nick)
         if after.name != before.name or after.global_name != before.global_name:
             #username/display name changes: Users is current-state, so just overwrite
             self.daba.updRecord("Users",
                 "username=" + db.sqlstr(after.name) + ", display_name=" + db.sqlstr(after.global_name),
                 "user_id = " + db.sqlstr(str(after.id)))
-            print("username/display name change detected, updated db")
+            logger.info("Username/display name updated: user_id=%s username=%r display_name=%r",
+                        after.id, after.name, after.global_name)
         #we don't care if someone changed their profile pic or whatever  
 
     #}
@@ -259,9 +308,11 @@ def log_live_event(user_id, before, after, *, first_observed=None):
     try:
         with open(constants.LIVE_LOG_FILENAM, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except OSError as e:
+        return True
+    except OSError:
         #the rename still lands in the db, it'll just show up undated
-        print("couldn't write the live log:", e)
+        logger.exception("Live nickname journal write failed: user_id=%s path=%s", user_id, constants.LIVE_LOG_FILENAM)
+        return False
 
 def load_live_log()->list:
     try:
@@ -475,7 +526,8 @@ async def slashemergsql(interac:discord.Interaction,query:str):
 
 if __name__ == '__main__':
     #so tests can import this file without trying to log into discord with a fake token
-    client.run(constants.BOT_TOKEN)
+    #let discord's timestamped console handler cover our logger too
+    client.run(constants.BOT_TOKEN, root_logger=True)
 
 #current issues I can't be bothered to address:
 '''

@@ -71,9 +71,33 @@ class botman(discord.Client):
        # self.autoparsing= constants.AUTOPARSE_DEFAULT
         #self.titleshouting=constants.TITLESHOUT_DEFAULT
 
-        #everything real moved to setup_hook, this is just a heartbeat now
         print("longged on")
+        await self.reconcile_nicknames()
     #}
+
+    async def on_resumed(self):
+        await self.reconcile_nicknames()
+
+    async def reconcile_nicknames(self):
+        guild = self.get_guild(constants.GUILD_TOKEN)
+        if guild is None:
+            print("couldn't reconcile nicknames: configured guild not found")
+            return
+        try:
+            #members is cached and can miss exactly the update we're trying to
+            #recover. fetch every page from discord instead, before opening a
+            #write transaction (live events still need the db while we wait)
+            members = [member async for member in guild.fetch_members(limit=None)]
+        except discord.HTTPException as e:
+            print("couldn't fetch members to reconcile nicknames:", e)
+            return
+        with self.daba.cnctn:
+            for member in members:
+                self.daba.addRecord("Users",db.easy_user_str(member.id,member.name,member.global_name),ignoredupes=True,commit=False)
+                if member.nick is not None:
+                    self.daba.addRecord("Nicknames",db.easy_nickn_str(member.id,member.nick),ignoredupes=True,commit=False)
+        #no live journal entry: we saw the current nick, not when it changed.
+        #without a real historical event it'll show up as (undated)
 
     async def on_member_join(self,member):
         #we are, in fact, going to scan every person that joins this server
@@ -93,10 +117,11 @@ class botman(discord.Client):
         #incredibly convenient function that is literally exactly what I need
         if after.nick != before.nick and after.nick is not None:
             #nick removal isn't a *new* nickname so there's nothing to log (before.nick already had it)
-            self.daba.addRecord("Nicknames",db.easy_nickn_str(after.id,after.nick))
+            added = self.daba.addRecord("Nicknames",db.easy_nickn_str(after.id,after.nick))
+            first_observed = added and self.daba.crsr.rowcount == 1
             #journal it too — the dump went stale the day it got taken, this is what
             #keeps renames from here on dated
-            log_live_event(after.id, before.nick, after.nick)
+            log_live_event(after.id, before.nick, after.nick, first_observed=first_observed)
             print("nickname change detected, added to db")
         if after.name != before.name or after.global_name != before.global_name:
             #username/display name changes: Users is current-state, so just overwrite
@@ -210,9 +235,13 @@ def load_log_dump(channel_id:int)->list:
 #after it got taken. so the bot journals every nick change it sees itself into its own
 #jsonl (same event shape the dump parses down to) and nick_first_seen merges the two.
 #gitignored like the db — real member data
-def log_live_event(user_id, before, after):
+def log_live_event(user_id, before, after, *, first_observed=None):
     rec = {"time": datetime.now().astimezone().isoformat(), "user_id": str(user_id),
            "kind": "changed", "before": before, "after": after}
+    if first_observed is not None:
+        #a repeat is still an event, but cannot date the original observation.
+        #before was already set when we saw this change, so it dates nothing either
+        rec["first_observed"] = first_observed
     try:
         with open(constants.LIVE_LOG_FILENAM, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -260,7 +289,12 @@ def nick_first_seen()->dict:
     if live_mtime != _nick_times["live_mtime"]:
         seen = {}
         for ev in load_live_log():
-            for nick in nicks_from_event(ev.get("kind", "changed"), ev.get("before"), ev.get("after")):
+            if "first_observed" in ev:
+                nicks = [ev["after"]] if ev["first_observed"] else []
+            else:
+                #older journals didn't distinguish a first observation from a reuse
+                nicks = nicks_from_event(ev.get("kind", "changed"), ev.get("before"), ev.get("after"))
+            for nick in nicks:
                 seen.setdefault((str(ev.get("user_id")), nick), ev["time"])
         _nick_times["live_mtime"] = live_mtime
         _nick_times["live_map"] = {key: datetime.fromisoformat(t).astimezone().strftime("%y-%m-%d")

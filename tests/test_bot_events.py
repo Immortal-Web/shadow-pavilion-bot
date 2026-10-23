@@ -51,6 +51,15 @@ class MemberUpdateTests(unittest.TestCase):
                          ("1", "old", "new nick"))
         self.assertIn("time", evs[0])
 
+    def test_reusing_a_nickname_keeps_history_indexes_and_journals_the_event(self):
+        run(self.client.on_member_update(self.member(), self.member(nick="old")))
+        run(self.client.on_member_update(self.member(nick="old"), self.member(nick="new")))
+        run(self.client.on_member_update(self.member(nick="new"), self.member(nick="old")))
+        self.assertEqual(self.daba.rdRecords("Nicknames", "nickn_id, nickname", "ORDER BY nickn_id"),
+                         [(1, "old"), (2, "new")])
+        with open(constants.LIVE_LOG_FILENAM, encoding="utf-8") as f:
+            self.assertEqual([json.loads(line)["after"] for line in f], ["old", "new", "old"])
+
     def test_nick_removal_is_not_journaled(self):
         run(self.client.on_member_update(self.member(nick="old"), self.member(nick=None)))
         self.assertFalse(os.path.exists(constants.LIVE_LOG_FILENAM))

@@ -49,21 +49,42 @@ class dbthingy:
         for tables in TABLE_GEN:
             self.crsr.execute(tables[TSQL_INDEX]) 
 
-        self.cnctn.commit()
+        #old versions stored every reuse as another row. move explanations first,
+        #then drop the copies and keep the oldest id. all three steps must succeed
+        #together, otherwise an interrupted migration could lose the attachments
+        with self.cnctn:
+            self.crsr.execute('''
+                UPDATE Explanations SET nickn_id = (
+                    SELECT MIN(older.nickn_id)
+                    FROM Nicknames AS original JOIN Nicknames AS older
+                      ON older.user_id IS original.user_id AND older.nickname IS original.nickname
+                    WHERE original.nickn_id = Explanations.nickn_id
+                ) WHERE nickn_id IN (SELECT nickn_id FROM Nicknames);
+            ''')
+            self.crsr.execute('''
+                DELETE FROM Nicknames WHERE nickn_id NOT IN (
+                    SELECT MIN(nickn_id) FROM Nicknames GROUP BY user_id, nickname
+                );
+            ''')
+            self.crsr.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS nicknames_user_nickname
+                ON Nicknames(user_id, nickname);
+            ''')
 
     #man honestly I miss the {} they actually make things easier to read
     
     #adds a record to the database. format: name, '(<csv>)' <--as you would if you were typing the sql yourself
     #one at a time i'm not processing multiple lmao
     def addRecord(self,tableName:str, addingvalues:str, ignoredupes:bool=False, commit:bool=True)->bool:
-        #ignoredupes: swap INSERT for INSERT OR IGNORE (firstrun re-scans would otherwise
-        #explode on the Users primary key). commit=False: caller batches and calls save() themselves
+        #nicknames are unique per user, even when they reuse an old one. ignoredupes
+        #does the same for other tables (e.g. Users on re-scan).
+        #commit=False: caller batches and calls save() themselves
         succed:bool =False
 
         for table in TABLE_GEN:
             #checks for valid table name and values that match the table
             if tableName == table[TNAME_INDEX] and (re.search(table[TREGEX_INDEX],addingvalues))!= None:
-                gener = gener_INSERT_IGNORE if ignoredupes else gener_INSERT
+                gener = gener_INSERT_IGNORE if ignoredupes or tableName == "Nicknames" else gener_INSERT
                 self.crsr.execute(gener.format(table=tableName,values=addingvalues))
                 if commit:
                     self.cnctn.commit()

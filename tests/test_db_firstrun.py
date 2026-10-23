@@ -29,7 +29,7 @@ class FirstRunTests(unittest.TestCase):
                 self.assertEqual(rows, [("1", "a"), ("2", "it's b")])  #deduped, not duplicated
                 #firstrun also grabs current nicks; nickless members are skipped (no 'None' rows)
                 nicks = client.daba.rdRecords("Nicknames", "user_id, nickname", "ORDER BY nickn_id")
-                self.assertEqual(nicks, [("1", "ace"), ("1", "ace")])  #one per run — Nicknames is append-only
+                self.assertEqual(nicks, [("1", "ace")])  #a re-scan keeps the original nickname row
                 client.daba.finish()
             finally:
                 db.DB_FILENAM = original  #CRITICAL: never leave this pointing into tmp-less reality

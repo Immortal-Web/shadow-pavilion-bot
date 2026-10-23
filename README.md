@@ -13,7 +13,7 @@ A Discord bot that tracks server members' nickname changes in an SQLite database
    - `GUILD_TOKEN` — your server ID (Discord settings → Advanced → Developer Mode, then right-click the server → Copy Server ID)
    - `ROLE` — name of the Discord role allowed to use the admin commands
 4. Run it: `python bot.py`
-5. In Discord, someone with that role runs `/firstrun_init` once — creates the tables and backfills all current members
+5. On ready and gateway resume, the bot fetches the current member roster from Discord and fills in missing users and nicknames. `/firstrun_init` is still available as a manual cached-roster scan.
 
 ## Commands
 
@@ -30,7 +30,9 @@ All commands only exist in the configured guild. "Role-gated" = requires the rol
 
 The bot only ever sees nickname changes from its own start date — but Dyno and Carl-bot log every change to a logging channel. A one-time archive of that channel (`logdump_<id>.jsonl`, gitignored) was mined for every past nickname; those are already in the database, and the commands that did the mining were one-shot and have been removed. The dump file still earns its keep though: the database has no timestamps by design, so it's what puts a user's nicknames in chronological order with first-seen dates. The dump is a snapshot, however — nicknames changed after it was taken would never get dated, so the bot also journals every change it sees live into `livenicks.jsonl` (gitignored), and both files are merged for first-seen dates.
 
-The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Nicknames neither file saw a change for sort last with an `(undated)` marker — those are the newest ones (set after the dump was taken, or missed by everyone); on a fresh clone with neither file, everything shows as undated in database order.
+The `#numbers` shown by `/print_nicknames` are per-user positions in that chronological list (the database's `nickn_id` is global and stays hidden underneath); `explain_nickname` and `add_explanation` refer to nicknames by that same `#number`. Each nickname appears once per member: reusing an old name keeps its original row, first-seen date and position. Nicknames neither file saw a change for sort last with an `(undated)` marker, in database insertion order; on a fresh clone with neither file, everything shows as undated.
+
+The ready/resume scan uses a fresh API roster rather than the member cache, so a missed live event can be recovered. It records current nicknames without adding a live journal event: seeing a name on reconnect does not tell us when it was set. Names recovered only this way remain `(undated)`. Later live events still get journaled, but only newly observed names get a first-seen date; reusing an undated name leaves it undated and keeps its position. Older journal entries remain readable. If Discord rejects the roster fetch, the bot logs the error and tries again on the next ready/resume.
 
 ## Files
 
@@ -51,7 +53,9 @@ The `#numbers` shown by `/print_nicknames` are per-user positions in that chrono
 | `Nicknames` | `nickn_id` (PK), `user_id` (FK), `nickname` |
 | `Explanations` | `expln_id` (PK), `nickn_id` (FK), `explanation` |
 
-Schema and per-table insert validation (regex) are defined in `constants.py`. Nicknames are recorded automatically on change; users are recorded on first run and on join.
+Schema and per-table insert validation (regex) are defined in `constants.py`. Nicknames are recorded automatically on change and reconciled on ready/resume; users are recorded on those scans and on join.
+
+On startup, `SetupDB` consolidates existing duplicate `(user_id, nickname)` rows, keeping the oldest `nickn_id` and moving every attached explanation to it. The migration runs in one transaction and creates a unique index to prevent further duplicates. Nickname inserts use `INSERT OR IGNORE`. The first cleanup can renumber a member's displayed list as duplicates disappear; later reuses do not add entries or shift indexes.
 
 ## Known issues
 
